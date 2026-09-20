@@ -1,4 +1,4 @@
-package com.example.interlux
+package com.keneristudios.interlux
 
 import io.flutter.embedding.android.FlutterActivity
 
