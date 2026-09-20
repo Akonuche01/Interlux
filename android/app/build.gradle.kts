@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.termcode"
+    namespace = "com.example.interlux"
     compileSdk = 36
     ndkVersion = "28.2.13676358"
 
@@ -14,7 +14,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.termcode"
+        applicationId = "com.example.interlux"
         minSdk = 24
         targetSdk = 36
         versionCode = flutter.versionCode
