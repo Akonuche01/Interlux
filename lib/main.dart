@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'terminal/terminal_screen.dart';
+
 void main() {
   runApp(const InterluxApp());
 }
@@ -21,30 +23,7 @@ class InterluxApp extends StatelessWidget {
         ),
       ),
       themeMode: ThemeMode.dark,
-      home: const HomePage(),
-    );
-  }
-}
-
-class HomePage extends StatelessWidget {
-  const HomePage({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Interlux')),
-      body: const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.terminal, size: 64),
-            SizedBox(height: 16),
-            Text('Interlux', style: TextStyle(fontSize: 24)),
-            SizedBox(height: 8),
-            Text('Terminal — scaffold ready'),
-          ],
-        ),
-      ),
+      home: const TerminalScreen(),
     );
   }
 }

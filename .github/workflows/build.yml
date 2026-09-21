@@ -30,6 +30,13 @@ jobs:
       - name: Analyze
         run: flutter analyze
 
+      # The terminal core is a native (C/JNI) library built by the NDK, so the
+      # build needs cmake and the Android NDK, which the hosted image provides.
+      - name: Ensure Android toolchain
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+            "ndk;28.2.13676358" "cmake;3.22.1" || true
+
       - name: Build release APK
         run: flutter build apk --release --no-tree-shake-icons
 
