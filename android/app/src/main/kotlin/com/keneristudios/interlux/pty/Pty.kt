@@ -6,6 +6,7 @@ import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import com.keneristudios.interlux.CrashLogger
+import com.keneristudios.interlux.NativeLib
 import java.io.IOException
 
 /**
@@ -38,7 +39,8 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "start" -> {
-                loadError?.let {
+                NativeLib.ensureLoaded()
+                NativeLib.loadError?.let {
                     result.error("NATIVE_LIBRARY_FAILED", it, null)
                     return
                 }
@@ -136,19 +138,4 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
     private external fun nativeResize(fd: Int, cols: Int, rows: Int)
     private external fun nativeClose(fd: Int)
 
-    companion object {
-        // Declared before init so the initializer can write to it.
-        @Volatile var loadError: String? = null
-
-        init {
-            // Loaded lazily, only when a terminal session is requested, and
-            // never on the main thread. A failure here is reported to the
-            // caller rather than killing the process.
-            try {
-                System.loadLibrary("interlux")
-            } catch (t: Throwable) {
-                loadError = "${'$'}{t.javaClass.name}: ${'$'}{t.message}"
-            }
-        }
-    }
 }
