@@ -21,6 +21,10 @@ android {
     }
 
     defaultConfig {
+        // Android 15 devices with 16KB pages cannot mmap .so files directly
+        // from the APK unless they are 16KB-aligned. Flutter aligns to 4KB, so
+        // extract the libraries to disk at install time instead.
+        packaging.jniLibs.useLegacyPackaging = true
         applicationId = "com.keneristudios.interlux"
         minSdk = 24
         targetSdk = 36
