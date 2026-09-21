@@ -1,6 +1,8 @@
 package com.keneristudios.interlux.pty
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -30,6 +32,7 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
     private var fd: Int = -1
     private var readerThread: Thread? = null
     private var eventSink: EventChannel.EventSink? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     init {
         methodChannel.setMethodCallHandler(this)
@@ -100,8 +103,11 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
     }
 
     /**
-     * Pump shell output to Flutter until EOF. Runs on a background thread; the
-     * sink calls are marshalled to the platform thread by EventChannel itself.
+     * Pump shell output to Flutter until EOF. Runs on a background thread.
+     *
+     * EventChannel sinks must be touched on the platform (main) thread; calling
+     * them from this reader thread trips FlutterJNI's @UiThread check and kills
+     * the process. Every sink hop therefore goes through [mainHandler].
      */
     private fun startReader() {
         readerThread = Thread {
@@ -113,14 +119,20 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
                     break
                 }
                 if (n <= 0) break
-                if (n < buffer.size) {
-                    eventSink?.success(buffer.copyOfRange(0, n))
-                } else {
-                    eventSink?.success(buffer)
-                }
+                val chunk = if (n < buffer.size) buffer.copyOfRange(0, n) else buffer
+                emit { it.success(chunk) }
             }
-            eventSink?.endOfStream()
+            emit { it.endOfStream() }
         }.also { it.start() }
+    }
+
+    /**
+     * Run [block] against the current sink on the main thread. Copying the
+     * reference first keeps a [stop] that clears the sink from racing the post.
+     */
+    private inline fun emit(crossinline block: (EventChannel.EventSink) -> Unit) {
+        val sink = eventSink ?: return
+        mainHandler.post { block(sink) }
     }
 
     fun stop() {
@@ -129,7 +141,7 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
             readerThread?.join(500)
         } catch (_: InterruptedException) {
         }
-        eventSink?.endOfStream()
+        emit { it.endOfStream() }
     }
 
     private external fun nativeCreate(): Int
