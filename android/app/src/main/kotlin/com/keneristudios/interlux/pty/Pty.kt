@@ -1,9 +1,11 @@
 package com.keneristudios.interlux.pty
 
+import android.content.Context
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import com.keneristudios.interlux.CrashLogger
 import java.io.IOException
 
 /**
@@ -18,7 +20,7 @@ import java.io.IOException
  * blocks by nature, and we want it to die quietly with the fd rather than
  * risk a coroutine cancellation racing the close.
  */
-class Pty(messenger: BinaryMessenger) :
+class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
     MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
 
     private val methodChannel = MethodChannel(messenger, "interlux/pty")
@@ -72,6 +74,10 @@ class Pty(messenger: BinaryMessenger) :
             "stop" -> {
                 stop()
                 result.success(null)
+            }
+            "getCrashLog" -> {
+                val ctx = context
+                result.success(if (ctx != null) CrashLogger.readAndClear(ctx) else "")
             }
             else -> result.notImplemented()
         }

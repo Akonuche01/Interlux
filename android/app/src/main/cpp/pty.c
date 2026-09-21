@@ -15,6 +15,24 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
+#include <signal.h>
+
+// A native crash (bad pointer in the pty path) is invisible to Java's
+// UncaughtExceptionHandler, so log it ourselves before the process dies.
+static void on_native_crash(int sig) {
+  LOGE("native crash: signal %d", sig);
+  _exit(128 + sig);
+}
+
+__attribute__((constructor)) static void setup_crash_handler(void) {
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = on_native_crash;
+  sigaction(SIGSEGV, &sa, NULL);
+  sigaction(SIGABRT, &sa, NULL);
+  sigaction(SIGBUS, &sa, NULL);
+}
+
 JNIEXPORT jint JNICALL
 Java_com_keneristudios_interlux_pty_Pty_nativeCreate(JNIEnv *env, jobject thiz) {
   int master_fd = -1;
