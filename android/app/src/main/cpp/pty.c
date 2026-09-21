@@ -1,7 +1,9 @@
-#include "pty.h"
+#define _GNU_SOURCE
 
+#include "pty.h"
 #include <errno.h>
 #include <pty.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <termios.h>
