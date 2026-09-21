@@ -64,6 +64,8 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
                             )
                         }
                     }
+                    com.keneristudios.interlux.BootTracer
+                        .stepPublic("pty: start userland=$userlandPath")
                     fd = nativeCreate(userlandPath)
                     if (fd < 0) {
                         result.error("PTY_CREATE_FAILED", "forkpty returned -1", null)

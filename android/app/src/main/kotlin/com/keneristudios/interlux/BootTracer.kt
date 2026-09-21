@@ -37,6 +37,15 @@ object BootTracer {
     }
 
     /**
+     * Like [step], but also mirrored into the public Downloads folder so it is
+     * readable from outside the app sandbox (e.g. from Termux while
+     * diagnosing the userland). Use for diagnostics only, never hot paths.
+     */
+    fun stepPublic(message: String) {
+        writeLine(formatLine(message), mirror = true)
+    }
+
+    /**
      * Records a crash. This one IS mirrored into the public Downloads folder,
      * because a hard crash may take the process down before anything else can
      * surface it, and this is the file we read from Termux to diagnose it.

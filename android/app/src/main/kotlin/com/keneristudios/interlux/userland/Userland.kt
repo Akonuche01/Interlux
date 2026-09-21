@@ -34,6 +34,8 @@ object Userland {
     /**
      * Idempotent: returns the extracted userland dir, extracting (or
      * re-extracting after an app update) only when the version marker is stale.
+     * The outcome is mirrored to the public Downloads log so it can be
+     * diagnosed from outside the app.
      */
     fun ensure(context: Context): File {
         val dir = File(context.filesDir, DIR_NAME)
@@ -41,18 +43,33 @@ object Userland {
 
         val marker = File(dir, ".version")
         if (marker.exists() && marker.readText().trim() == VERSION) {
+            com.keneristudios.interlux.BootTracer
+                .stepPublic("userland: cached at ${dir.absolutePath}")
             return dir
         }
 
-        for (name in assets) {
-            val out = File(dir, name)
-            copyAsset(context, "$ASSET_DIR/$name", out)
-            out.setReadable(true, false)
-            if (name in executables) {
-                out.setExecutable(true, false)
+        try {
+            for (name in assets) {
+                val out = File(dir, name)
+                copyAsset(context, "$ASSET_DIR/$name", out)
+                out.setReadable(true, false)
+                if (name in executables) {
+                    out.setExecutable(true, false)
+                }
             }
+            marker.writeText(VERSION)
+        } catch (e: Exception) {
+            com.keneristudios.interlux.BootTracer.stepPublic(
+                "userland: FAILED ${e.javaClass.simpleName}: ${e.message}"
+            )
+            throw e
         }
-        marker.writeText(VERSION)
+
+        val busybox = File(dir, "busybox")
+        com.keneristudios.interlux.BootTracer.stepPublic(
+            "userland: extracted ${assets.size} files to ${dir.absolutePath} " +
+                "busybox.exec=${busybox.canExecute()}"
+        )
         return dir
     }
 

@@ -17,6 +17,14 @@ class InterluxApplication : Application() {
 
         // Wire up logging first, so everything below is observable from Termux.
         BootTracer.init(applicationContext)
+        // Report the exact build to the public Downloads log so it is always
+        // possible to tell which APK is actually running.
+        try {
+            val pi = applicationContext.packageManager
+                .getPackageInfo(applicationContext.packageName, 0)
+            BootTracer.stepPublic("version=${pi.versionName} build=${pi.versionCode}")
+        } catch (_: Throwable) {
+        }
         BootTracer.step("Application.onCreate")
         BootTracer.installCrashHandler()
         CrashLogger.install(applicationContext)
