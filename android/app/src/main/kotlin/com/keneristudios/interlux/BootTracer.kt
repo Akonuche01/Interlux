@@ -28,12 +28,34 @@ object BootTracer {
         step("BootTracer.init")
     }
 
+    /**
+     * Records one lifecycle step. Routine steps go to the app-scoped external
+     * dir only, which needs no permission and stays out of the user's way.
+     */
     fun step(message: String) {
+        writeLine(formatLine(message), mirror = false)
+    }
+
+    /**
+     * Records a crash. This one IS mirrored into the public Downloads folder,
+     * because a hard crash may take the process down before anything else can
+     * surface it, and this is the file we read from Termux to diagnose it.
+     */
+    fun reportCrash(thread: Thread, throwable: Throwable) {
+        val sw = StringWriter()
+        throwable.printStackTrace(PrintWriter(sw))
+        writeLine(formatLine("UNCAUGHT thread=${thread.name}\n$sw"), mirror = true)
+    }
+
+    private fun formatLine(message: String): String {
         val ts = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US)
             .format(java.util.Date())
-        val line = "$ts $message\n"
+        return "$ts $message\n"
+    }
 
-        // App-scoped external storage: no permission needed.
+    private fun writeLine(line: String, mirror: Boolean) {
+        // App-scoped external storage: no permission needed, invisible to the
+        // user in their Downloads folder.
         try {
             val dir = File(Environment.getExternalStorageDirectory(),
                 "Android/data/com.keneristudios.interlux/files")
@@ -41,22 +63,36 @@ object BootTracer {
             File(dir, FILE).appendText(line)
         } catch (_: Throwable) {}
 
-        // Public Downloads via MediaStore: readable from Termux.
+        if (!mirror) return
+
+        // Public Downloads via MediaStore: append to ONE existing row if there
+        // is one, instead of inserting a new file per call.
         try {
-            val values = ContentValues().apply {
-                put("_display_name", FILE)
-                put("mime_type", "text/plain")
-                put("relative_path", "Download/")
-                put("is_pending", 1)
-            }
             val r = resolver ?: return
-            val uri = r.insert(
-                android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-            if (uri != null) {
-                r.openOutputStream(uri, "w")?.use { it.write(line.toByteArray()) }
-                values.clear()
-                values.put("is_pending", 0)
-                r.update(uri, values, null, null)
+            val collection = android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI
+            val projection = arrayOf(android.provider.MediaStore.MediaColumns._ID)
+            val selection = "_display_name = ?"
+            val selArgs = arrayOf(FILE)
+
+            var uri: Uri? = null
+            r.query(collection, projection, selection, selArgs, null)?.use { c ->
+                if (c.moveToFirst()) {
+                    uri = android.content.ContentUris.withAppendedId(
+                        collection, c.getLong(0))
+                }
+            }
+
+            if (uri == null) {
+                val values = ContentValues().apply {
+                    put("_display_name", FILE)
+                    put("mime_type", "text/plain")
+                    put("relative_path", "Download/")
+                }
+                uri = r.insert(collection, values)
+            }
+
+            uri?.let { u ->
+                r.openOutputStream(u, "wa")?.use { it.write(line.toByteArray()) }
             }
         } catch (_: Throwable) {}
     }
@@ -65,9 +101,7 @@ object BootTracer {
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
-                val sw = StringWriter()
-                throwable.printStackTrace(PrintWriter(sw))
-                step("UNCAUGHT thread=${thread.name}\n$sw")
+                reportCrash(thread, throwable)
             } catch (_: Throwable) {}
             previous?.uncaughtException(thread, throwable)
         }

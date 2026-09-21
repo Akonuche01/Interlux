@@ -136,9 +136,19 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
     }
 
     fun stop() {
+        // Close the master fd BEFORE joining. The reader thread is blocked
+        // inside read() on this fd; closing it is what unblocks the read so
+        // the thread can actually exit. Native close also reaps the child.
+        val toClose = fd
         fd = -1
+        if (toClose >= 0) {
+            try {
+                nativeClose(toClose)
+            } catch (_: Throwable) {
+            }
+        }
         try {
-            readerThread?.join(500)
+            readerThread?.join(1000)
         } catch (_: InterruptedException) {
         }
         emit { it.endOfStream() }

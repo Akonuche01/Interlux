@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -134,7 +135,27 @@ Java_com_keneristudios_interlux_pty_Pty_nativeResize(JNIEnv *env, jobject thiz,
 JNIEXPORT void JNICALL
 Java_com_keneristudios_interlux_pty_Pty_nativeClose(JNIEnv *env, jobject thiz,
                                                     jint fd) {
-  if (fd >= 0) {
-    close(fd);
+  if (fd < 0) {
+    return;
+  }
+
+  // Closing the master fd sends SIGHUP to the child's foreground process
+  // group, which is what actually terminates the shell. Closing first also
+  // unblocks a reader thread stuck in read() on this fd.
+  close(fd);
+
+  // forkpty leaves us as the parent of the shell; if we never wait the child
+  // stays as a zombie for the life of the process. Reap it, but do not block
+  // forever: a wedged shell should not pin the caller.
+  int status;
+  for (int i = 0; i < 20; i++) {  // up to ~2s
+    pid_t w = waitpid(-1, &status, WNOHANG);
+    if (w > 0) {
+      break;
+    }
+    if (w < 0 && errno != EINTR) {
+      break;
+    }
+    usleep(100000);  // 100ms
   }
 }
