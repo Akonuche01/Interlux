@@ -137,6 +137,9 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
     private external fun nativeClose(fd: Int)
 
     companion object {
+        // Declared before init so the initializer can write to it.
+        @Volatile var loadError: String? = null
+
         init {
             // Loaded lazily, only when a terminal session is requested, and
             // never on the main thread. A failure here is reported to the
@@ -147,7 +150,5 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
                 loadError = "${'$'}{t.javaClass.name}: ${'$'}{t.message}"
             }
         }
-
-        @Volatile var loadError: String? = null
     }
 }

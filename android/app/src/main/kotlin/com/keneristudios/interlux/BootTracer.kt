@@ -73,21 +73,3 @@ object BootTracer {
         }
     }
 }
-
-class InterluxApplication : Application() {
-    override fun onCreate() {
-        super.onCreate()
-        BootTracer.init(applicationContext)
-        BootTracer.installCrashHandler()
-        BootTracer.step("Application.onCreate")
-
-        // Load the native library here, at the earliest point, and record
-        // whether it succeeds. A failure here is fatal but reportable.
-        try {
-            System.loadLibrary("interlux")
-            BootTracer.step("loadLibrary(interlux) OK")
-        } catch (t: Throwable) {
-            BootTracer.step("loadLibrary(interlux) FAILED: ${t.javaClass.name}: ${t.message}")
-        }
-    }
-}
