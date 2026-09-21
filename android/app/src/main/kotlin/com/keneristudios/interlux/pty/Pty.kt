@@ -38,6 +38,10 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "start" -> {
+                loadError?.let {
+                    result.error("NATIVE_LIBRARY_FAILED", it, null)
+                    return
+                }
                 try {
                     fd = nativeCreate()
                     if (fd < 0) {
@@ -46,6 +50,8 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
                     }
                     startReader()
                     result.success(fd)
+                } catch (e: UnsatisfiedLinkError) {
+                    result.error("NATIVE_LIBRARY_FAILED", e.message, null)
                 } catch (e: Exception) {
                     result.error("PTY_CREATE_FAILED", e.message, null)
                 }
@@ -132,7 +138,16 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
 
     companion object {
         init {
-            System.loadLibrary("interlux")
+            // Loaded lazily, only when a terminal session is requested, and
+            // never on the main thread. A failure here is reported to the
+            // caller rather than killing the process.
+            try {
+                System.loadLibrary("interlux")
+            } catch (t: Throwable) {
+                loadError = "${'$'}{t.javaClass.name}: ${'$'}{t.message}"
+            }
         }
+
+        @Volatile var loadError: String? = null
     }
 }
