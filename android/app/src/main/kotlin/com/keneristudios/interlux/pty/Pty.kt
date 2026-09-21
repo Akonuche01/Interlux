@@ -48,7 +48,23 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
                     return
                 }
                 try {
-                    fd = nativeCreate()
+                    // Extract the bundled bionic userland (busybox) so the
+                    // child shell can be our own POSIX environment rather than
+                    // the bare Android system shell.
+                    var userlandPath: String? = null
+                    if (context != null) {
+                        try {
+                            userlandPath =
+                                com.keneristudios.interlux.userland.Userland
+                                    .ensure(context).absolutePath
+                        } catch (e: Exception) {
+                            CrashLogger.append(
+                                context,
+                                "userland extract failed: ${e.message}\n"
+                            )
+                        }
+                    }
+                    fd = nativeCreate(userlandPath)
                     if (fd < 0) {
                         result.error("PTY_CREATE_FAILED", "forkpty returned -1", null)
                         return
@@ -154,7 +170,7 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
         emit { it.endOfStream() }
     }
 
-    private external fun nativeCreate(): Int
+    private external fun nativeCreate(userlandPath: String?): Int
     private external fun nativeRead(fd: Int, buf: ByteArray, len: Int): Int
     private external fun nativeWrite(fd: Int, buf: ByteArray, len: Int): Int
     private external fun nativeResize(fd: Int, cols: Int, rows: Int)

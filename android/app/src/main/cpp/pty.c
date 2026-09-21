@@ -2,6 +2,7 @@
 
 #include "pty.h"
 #include <errno.h>
+#include <limits.h>
 #include <pty.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,13 +35,27 @@ __attribute__((constructor)) static void setup_crash_handler(void) {
   sigaction(SIGBUS, &sa, NULL);
 }
 
+// Path of the bundled busybox multicall launcher relative to the userland dir.
+// It is a bionic binary whose interpreter is /system/bin/linker64, so the only
+// runtime requirement is LD_LIBRARY_PATH pointing at the userland dir.
+#define BUSYBOX_NAME "busybox"
+
 JNIEXPORT jint JNICALL
-Java_com_keneristudios_interlux_pty_Pty_nativeCreate(JNIEnv *env, jobject thiz) {
+Java_com_keneristudios_interlux_pty_Pty_nativeCreate(JNIEnv *env, jobject thiz,
+                                                     jstring userland_path) {
+  const char *userland = NULL;
+  if (userland_path != NULL) {
+    userland = (*env)->GetStringUTFChars(env, userland_path, NULL);
+  }
+
   int master_fd = -1;
   pid_t pid = forkpty(&master_fd, NULL, NULL, NULL);
 
   if (pid < 0) {
     LOGE("forkpty failed: %s", strerror(errno));
+    if (userland != NULL) {
+      (*env)->ReleaseStringUTFChars(env, userland_path, userland);
+    }
     return -1;
   }
 
@@ -64,6 +79,42 @@ Java_com_keneristudios_interlux_pty_Pty_nativeCreate(JNIEnv *env, jobject thiz) 
     setenv("TERM", "xterm-256color", 1);
     setenv("LANG", "C.UTF-8", 1);
 
+    // Prefer the bundled bionic userland. argv[0]="sh" makes the multicall
+    // launcher dispatch to the ash applet, and standalone shell mode resolves
+    // coreutils applets in-process (no symlink forest required).
+    if (userland != NULL) {
+      char busybox[PATH_MAX];
+      if (getenv("HOME") == NULL) {
+        setenv("HOME", userland, 1);
+      }
+
+      char path_env[PATH_MAX];
+      snprintf(path_env, sizeof(path_env),
+               "%s:/vendor/bin:/system/xbin:/system/bin", userland);
+      setenv("PATH", path_env, 1);
+
+      // The launcher dlopens libbusybox.so out of this path.
+      setenv("LD_LIBRARY_PATH", userland, 1);
+
+      // ash only expands \w/\$ PS1 when it is a login/interactive shell with
+      // a profile; keep the prompt simple and predictable.
+      setenv("PS1", "interlux:\\w\\$ ", 1);
+
+      snprintf(busybox, sizeof(busybox), "%s/%s", userland, BUSYBOX_NAME);
+      if (access(busybox, X_OK) == 0) {
+        LOGI("exec bundled shell: %s", busybox);
+        char *const argv[] = {"sh", "-i", NULL};
+        execv(busybox, argv);
+        // Fall through to the system shell if the bundled one cannot exec.
+        LOGE("bundled execv failed: %s", strerror(errno));
+      } else {
+        LOGE("bundled busybox not executable: %s", busybox);
+      }
+    }
+
+    // Fallback: Android's own shell, so a broken userland never leaves the
+    // terminal dead on arrival.
+    setenv("PS1", "\\$ ", 1);
     char *const argv[] = {"/system/bin/sh", NULL};
     execv(argv[0], argv);
 
@@ -73,6 +124,9 @@ Java_com_keneristudios_interlux_pty_Pty_nativeCreate(JNIEnv *env, jobject thiz) 
   }
 
   LOGI("forkpty ok: pid=%d master_fd=%d", pid, master_fd);
+  if (userland != NULL) {
+    (*env)->ReleaseStringUTFChars(env, userland_path, userland);
+  }
   return master_fd;
 }
 

@@ -38,6 +38,16 @@ object CrashLogger {
         }
     }
 
+    /** Append a note to the crash log without clobbering existing entries. */
+    fun append(context: Context, text: String) {
+        try {
+            val dir = context.getExternalFilesDir(null) ?: return
+            File(dir, FILE_NAME).appendText(text)
+        } catch (_: Throwable) {
+            // Logging must never mask the problem it is reporting.
+        }
+    }
+
     /** Read and clear the accumulated crash log. */
     fun readAndClear(context: Context): String {
         val dir = context.getExternalFilesDir(null) ?: return ""

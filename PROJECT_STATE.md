@@ -43,8 +43,15 @@ docs/STAGE2_SECCOMP_FINDINGS.md. Key conclusions:
   /system/bin/linker64. Verified working on device in a clean env: busybox +
   libbusybox.so.1.38.0 give a full POSIX shell (ash) + all coreutils applets.
 
-Next: bundle busybox as a Flutter asset, extract to app data at first run, and
-switch pty.c from /system/bin/sh to the bundled busybox ash with LD_LIBRARY_PATH.
+DONE (committed, awaiting build test):
+- android/app/src/main/assets/userland/{busybox,libbusybox.so.1.38.0} bundled.
+  busybox is a 4KB bionic launcher; all applets live in libbusybox.so (876KB).
+  Both are 16KB-aligned, so 16KB-page Android 15 devices are fine.
+- Userland.kt extracts them (idempotent, version-stamped) to filesDir/userland.
+- pty.c now execs <userland>/busybox as `sh -i` with LD_LIBRARY_PATH/PATH/HOME/
+  PS1 set, and falls back to /system/bin/sh if the bundled one cannot exec.
+  Both binaries are 16KB page aligned.
+- CrashLogger gained append().
 
 ## Notes
 - Interlux and Code Studio are SEPARATE apps.

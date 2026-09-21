@@ -10,11 +10,15 @@ extern "C" {
 /**
  * Create a new pseudo-terminal and spawn a shell as its child.
  *
- * @return the master fd (>= 0) on success, or -1 on failure. The child side
- *         of the pty is exec'd into /system/bin/sh and never returns.
+ * @param userland_path absolute path to the extracted bundled userland dir, or
+ *                      NULL to use the system shell directly. When non-NULL the
+ *                      child execs <userland_path>/busybox as an interactive
+ *                      `sh` (ash), falling back to /system/bin/sh on failure.
+ * @return the master fd (>= 0) on success, or -1 on failure.
  */
 JNIEXPORT jint JNICALL
-Java_com_keneristudios_interlux_pty_Pty_nativeCreate(JNIEnv *env, jobject thiz);
+Java_com_keneristudios_interlux_pty_Pty_nativeCreate(JNIEnv *env, jobject thiz,
+                                                     jstring userland_path);
 
 /**
  * Read up to `len` bytes from the master side of the pty.
