@@ -32,6 +32,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
   StreamSubscription<void>? _exitedSub;
   bool _errorShown = false;
 
+  /// Sticky modifiers for the extra-keys bar (Termux-style).
+  bool _ctrlHeld = false;
+  bool _altHeld = false;
+
   static const _fallbackCols = 80;
   static const _fallbackRows = 24;
 
@@ -79,6 +83,26 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _pty.resize(_terminal.viewWidth, _terminal.viewHeight);
   }
 
+  void _sendExtraKey(_ExtraKey extra) {
+    if (extra.text != null) {
+      _pty.write(extra.text!);
+    } else if (extra.key != null) {
+      _terminal.keyInput(
+        extra.key!,
+        ctrl: extra.ctrlCombo || _ctrlHeld,
+        alt: _altHeld,
+      );
+    }
+    // Sticky modifiers are one-shot: a plain key consumes them, but a
+    // dedicated Ctrl+C/D/Z combo leaves them armed for the next key.
+    if (!extra.ctrlCombo && (_ctrlHeld || _altHeld)) {
+      setState(() {
+        _ctrlHeld = false;
+        _altHeld = false;
+      });
+    }
+  }
+
   void _showError(String message) {
     _errorShown = true;
     if (!mounted) return;
@@ -101,10 +125,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
-        child: TerminalView(
-          _terminal,
-          controller: _controller,
-          theme: const TerminalTheme(
+        child: Column(
+          children: [
+            Expanded(
+              child: TerminalView(
+                _terminal,
+                controller: _controller,
+                theme: const TerminalTheme(
             cursor: Color(0xFFE6E6E6),
             selection: Color(0x40E6E6E6),
             foreground: Color(0xFFE6E6E6),
@@ -133,6 +160,151 @@ class _TerminalScreenState extends State<TerminalScreen> {
           autofocus: true,
           hardwareKeyboardOnly: false,
           simulateScroll: true,
+        ),
+      ),
+      _ExtraKeysBar(
+        ctrlHeld: _ctrlHeld,
+        altHeld: _altHeld,
+        onToggleCtrl: () => setState(() => _ctrlHeld = !_ctrlHeld),
+        onToggleAlt: () => setState(() => _altHeld = !_altHeld),
+        onKey: _sendExtraKey,
+      ),
+    ],
+  ),
+  ),
+);
+}
+}
+
+/// One extra key: either a [TerminalKey] (arrows, esc, …) or raw [text].
+class _ExtraKey {
+  final String label;
+  final TerminalKey? key;
+  final String? text;
+  final bool ctrlCombo;
+
+  const _ExtraKey.key(this.label, this.key)
+    : text = null,
+      ctrlCombo = false;
+  const _ExtraKey.text(this.label, this.text)
+    : key = null,
+      ctrlCombo = false;
+  const _ExtraKey.ctrl(this.label, this.key) : text = null, ctrlCombo = true;
+}
+
+/// Termux-style extra-keys row: phone keyboards lack Esc/Tab/arrows/Ctrl,
+/// all of which pentest tools (vim, nmap interactive, shells) need.
+class _ExtraKeysBar extends StatelessWidget {
+  final bool ctrlHeld;
+  final bool altHeld;
+  final VoidCallback onToggleCtrl;
+  final VoidCallback onToggleAlt;
+  final void Function(_ExtraKey key) onKey;
+
+  const _ExtraKeysBar({
+    required this.ctrlHeld,
+    required this.altHeld,
+    required this.onToggleCtrl,
+    required this.onToggleAlt,
+    required this.onKey,
+  });
+
+  static const _keys = [
+    _ExtraKey.key('ESC', TerminalKey.escape),
+    _ExtraKey.key('TAB', TerminalKey.tab),
+    _ExtraKey.key('←', TerminalKey.arrowLeft),
+    _ExtraKey.key('→', TerminalKey.arrowRight),
+    _ExtraKey.key('↑', TerminalKey.arrowUp),
+    _ExtraKey.key('↓', TerminalKey.arrowDown),
+    _ExtraKey.key('HOME', TerminalKey.home),
+    _ExtraKey.key('END', TerminalKey.end),
+    _ExtraKey.key('DEL', TerminalKey.delete),
+    _ExtraKey.key('PGUP', TerminalKey.pageUp),
+    _ExtraKey.key('PGDN', TerminalKey.pageDown),
+    _ExtraKey.text('|', '|'),
+    _ExtraKey.text('/', '/'),
+    _ExtraKey.text('-', '-'),
+    _ExtraKey.text('~', '~'),
+    _ExtraKey.ctrl('C', TerminalKey.keyC),
+    _ExtraKey.ctrl('D', TerminalKey.keyD),
+    _ExtraKey.ctrl('Z', TerminalKey.keyZ),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xFF1A1A1A),
+      height: 48,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        children: [
+          _ToggleButton(
+            label: 'CTRL',
+            active: ctrlHeld,
+            onTap: onToggleCtrl,
+          ),
+          _ToggleButton(label: 'ALT', active: altHeld, onTap: onToggleAlt),
+          for (final k in _keys)
+            _KeyButton(label: k.label, onTap: () => onKey(k)),
+        ],
+      ),
+    );
+  }
+}
+
+class _ToggleButton extends StatelessWidget {
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+
+  const _ToggleButton({
+    required this.label,
+    required this.active,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        alignment: Alignment.center,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        margin: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: active ? const Color(0xFF6B4FA1) : const Color(0xFF2A2A2A),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(color: Color(0xFFE6E6E6), fontSize: 13),
+        ),
+      ),
+    );
+  }
+}
+
+class _KeyButton extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+
+  const _KeyButton({required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        alignment: Alignment.center,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        margin: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: const Color(0xFF2A2A2A),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(color: Color(0xFFE6E6E6), fontSize: 13),
         ),
       ),
     );
