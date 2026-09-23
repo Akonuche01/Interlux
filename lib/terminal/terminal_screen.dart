@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:xterm/xterm.dart';
 
 import 'terminal_session.dart';
+import '../pentest/report.dart';
 import '../pentest/target.dart';
 import '../pentest/targets_screen.dart';
 import '../pentest/targets_store.dart';
+import '../power/battery_opt.dart';
 
 /// A full-screen interactive terminal backed by a real shell.
 ///
@@ -40,10 +42,15 @@ class _TerminalScreenState extends State<TerminalScreen> {
     super.initState();
     _targetsStore.load();
     _addSession();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      BatteryOptPrompt.maybeShow(context);
+    });
   }
 
-  void _addSession({String? run}) {
-    final session = TerminalSession();
+  void _addSession({String? run, String? targetLabel}) {
+    final session = TerminalSession()
+      ..targetLabel = targetLabel
+      ..command = run;
     session.addListener(_onSessionChanged);
     setState(() {
       _sessions.add(session);
@@ -94,6 +101,16 @@ class _TerminalScreenState extends State<TerminalScreen> {
     if (mounted) setState(() {});
   }
 
+  void _shareActiveReport() {
+    final session = _active;
+    shareSessionReport(
+      terminal: session.terminal,
+      sessionName: session.name,
+      targetLabel: session.targetLabel,
+      command: session.command,
+    );
+  }
+
   void _openTargets() {
     Navigator.push(
       context,
@@ -101,7 +118,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
         builder: (_) => TargetsScreen(
           store: _targetsStore,
           onLaunch: (PentestTarget target, String command) {
-            _addSession(run: command);
+            _addSession(run: command, targetLabel: target.label);
           },
         ),
       ),
@@ -159,6 +176,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
               onClose: _closeSession,
               onAdd: _addSession,
               onTargets: _openTargets,
+              onShare: _shareActiveReport,
             ),
             Expanded(
               child: TerminalView(
@@ -218,6 +236,7 @@ class _SessionTabBar extends StatelessWidget {
   final void Function(int index) onClose;
   final VoidCallback onAdd;
   final VoidCallback onTargets;
+  final VoidCallback onShare;
 
   const _SessionTabBar({
     required this.sessions,
@@ -226,6 +245,7 @@ class _SessionTabBar extends StatelessWidget {
     required this.onClose,
     required this.onAdd,
     required this.onTargets,
+    required this.onShare,
   });
 
   @override
@@ -302,6 +322,23 @@ class _SessionTabBar extends StatelessWidget {
               ),
               child: const Icon(
                 Icons.radar,
+                size: 16,
+                color: Color(0xFFE6E6E6),
+              ),
+            ),
+          ),
+          GestureDetector(
+            onTap: onShare,
+            child: Container(
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              margin: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: const Color(0xFF232323),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Icon(
+                Icons.share,
                 size: 16,
                 color: Color(0xFFE6E6E6),
               ),

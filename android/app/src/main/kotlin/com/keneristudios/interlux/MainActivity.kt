@@ -14,6 +14,8 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         BootTracer.step("configureFlutterEngine")
+        TerminalService.start(applicationContext)
+        PowerGate(flutterEngine.dartExecutor.binaryMessenger, applicationContext)
         Pty(flutterEngine.dartExecutor.binaryMessenger, applicationContext)
     }
 }

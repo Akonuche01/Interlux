@@ -28,6 +28,10 @@ class TerminalSession extends ChangeNotifier {
   /// Last boot failure, if any (shown as a snackbar by the screen).
   Object? error;
 
+  /// Pentest provenance for reports: which target/command opened this tab.
+  String? targetLabel;
+  String? command;
+
   TerminalSession() : name = 't${_nextId++}' {
     terminal.onOutput = (data) {
       pty.write(data);
