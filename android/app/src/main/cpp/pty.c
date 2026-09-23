@@ -124,9 +124,33 @@ Java_com_keneristudios_interlux_pty_Pty_nativeCreate(JNIEnv *env, jobject thiz,
         setenv("REQUESTS_CA_BUNDLE", ca, 1);
       }
 
+      // Bash reads BASH_ENV for interactive non-login shells, so point it
+      // at our profile too (ENV covers ash/dash).
+      {
+        char bash_env[PATH_MAX];
+        snprintf(bash_env, sizeof(bash_env), "%s/etc/profile", userland);
+        setenv("BASH_ENV", bash_env, 1);
+      }
+
       // ash only expands \w/\$ PS1 when it is a login/interactive shell with
       // a profile; keep the prompt simple and predictable.
       setenv("PS1", "interlux:\\w\\$ ", 1);
+
+      // Prefer bash as the login shell (Phase 1.4); fall back to the bundled
+      // busybox ash, then to the system shell, so a broken userland never
+      // leaves the terminal dead on arrival.
+      {
+        char bash[PATH_MAX];
+        snprintf(bash, sizeof(bash), "%s/bin/bash", userland);
+        if (access(bash, X_OK) == 0) {
+          LOGI("exec bundled shell: %s", bash);
+          char *const argv[] = {"bash", "-i", NULL};
+          execv(bash, argv);
+          LOGE("bash execv failed: %s", strerror(errno));
+        } else {
+          LOGE("bundled bash not executable: %s", bash);
+        }
+      }
 
       snprintf(busybox, sizeof(busybox), "%s/%s", userland, BUSYBOX_NAME);
       if (access(busybox, X_OK) == 0) {

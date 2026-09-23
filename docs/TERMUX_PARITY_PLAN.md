@@ -26,10 +26,14 @@ Evidence = boot-log line, screenshot, or `flutter test` — never "should work".
 - [x] Battery-optimizations prompt (Doze throttled our UID mid-test).
     Proven 2026-09-23: one-time dialog → system exemption screen → granted.
     Shown once (dismissal remembered); `interlux/power` channel.
-3. [ ] Shared-storage access (`~/storage` equivalent: READ/WRITE_EXTERNAL_STORAGE,
-    targetSdk-28 legacy storage). Done-when: `ls ~/storage/Download` works.
-4. [ ] bash as default login shell (bionic build + closure, keep ash fallback).
-    Done-when: `echo $0` prints bash, profile + completions load.
+- [x] Shared-storage access (`~/storage` equivalent).
+    Proven 2026-09-23: permission granted (USER_SET), `~/storage -> /sdcard`
+    symlink from login profile, Download listing flows. targetSdk 28 legacy
+    storage; `interlux/storage` channel; Userland full-tools-9.
+- [x] bash as default login shell (bionic build + closure, keep ash fallback).
+    Proven 2026-09-23: Termux bash 5.3.20 + 43 loadable builtins
+    (linker64/16KB/NEEDED verified), pty execs `bash -i` (BASH_ENV profile,
+    PS1 confirmed), busybox ash + system sh fallbacks intact.
 
 ## Phase 2 — Package parity (install anything, update everything)
 

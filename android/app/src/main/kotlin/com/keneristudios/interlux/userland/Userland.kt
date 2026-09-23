@@ -56,7 +56,12 @@ object Userland {
     //   in iroot (proot can't find loaders otherwise); pkginstall.sh replaces
     //   apk (its fetcher EOFs + db writer EACCES under proot) — whois 5.6.6
     //   installed + live query proven on-device.
-    private const val VERSION = "full-tools-8"
+    // v15 (shared storage): ~/storage symlink line in profile (no asset
+    //   changes; refresh needed only so existing installs rewrite profile).
+    // v16 (bash default): + Termux bionic bash 5.3.20 + 43 loadable builtins
+    //   (linker64/16KB/NEEDED verified); pty execs bash -i first (BASH_ENV
+    //   profile), busybox ash stays as fallback.
+    private const val VERSION = "full-tools-10"
     private const val ASSET_DIR = "userland"
     private const val DIR_NAME = "userland"
 
@@ -217,6 +222,11 @@ object Userland {
             # `proot --version`; guest rootfs via rootfs.sh + iroot (3c-ii).
             export PROOT_TMP_DIR="${dir.absolutePath}/tmp"
             proot-test() { LD_LIBRARY_PATH="${dir.absolutePath}" "${dir.absolutePath}/proot" --version && echo PROOT-OK; }
+            # Phase 1.3 shared storage: ~/storage -> /sdcard (needs the storage
+            # permission; the prompt lives in the app, the link is harmless
+            # without it and refreshes every login with no re-extract).
+            if [ ! -e "${dir.absolutePath}/home/storage" ]; then "${dir.absolutePath}/busybox" ln -s /sdcard "${dir.absolutePath}/home/storage" 2>/dev/null || true; fi
+            # iroot: enter the Alpine guest (needs `rootfs.sh install` first).
             # iroot: enter the Alpine guest (needs `rootfs.sh install` first).
             # PROOT_LOADER/*_32 are mandatory: proot has Termux's prefix baked
             # in and cannot find its ELF loaders otherwise. TMP_DIR avoids the

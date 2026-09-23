@@ -7,6 +7,7 @@ import '../pentest/target.dart';
 import '../pentest/targets_screen.dart';
 import '../pentest/targets_store.dart';
 import '../power/battery_opt.dart';
+import '../storage/setup_storage.dart';
 
 /// A full-screen interactive terminal backed by a real shell.
 ///
@@ -42,8 +43,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
     super.initState();
     _targetsStore.load();
     _addSession();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      BatteryOptPrompt.maybeShow(context);
+    // Onboarding prompts run in sequence so dialogs never stack.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await BatteryOptPrompt.maybeShow(context);
+      if (mounted) await StoragePrompt.maybeShow(context);
     });
   }
 
