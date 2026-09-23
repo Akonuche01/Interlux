@@ -84,17 +84,45 @@ Java_com_keneristudios_interlux_pty_Pty_nativeCreate(JNIEnv *env, jobject thiz,
     // coreutils applets in-process (no symlink forest required).
     if (userland != NULL) {
       char busybox[PATH_MAX];
-      if (getenv("HOME") == NULL) {
-        setenv("HOME", userland, 1);
-      }
 
-      char path_env[PATH_MAX];
+      char path_env[PATH_MAX * 2];
       snprintf(path_env, sizeof(path_env),
-               "%s:/vendor/bin:/system/xbin:/system/bin", userland);
+               "%s/bin:%s:%s/home/.local/bin:/vendor/bin:/system/xbin:/system/bin",
+               userland, userland, userland);
       setenv("PATH", path_env, 1);
 
-      // The launcher dlopens libbusybox.so out of this path.
-      setenv("LD_LIBRARY_PATH", userland, 1);
+      // The launchers dlopen their .so files out of these paths (flat root
+      // for the stage-2/3 libs, lib/ for the Option A power set).
+      {
+        char ld[PATH_MAX * 2], terminfo[PATH_MAX], pyhome[PATH_MAX];
+        snprintf(ld, sizeof(ld), "%s/lib:%s", userland, userland);
+        snprintf(terminfo, sizeof(terminfo), "%s/share/terminfo", userland);
+        snprintf(pyhome, sizeof(pyhome), "%s", userland);
+        setenv("LD_LIBRARY_PATH", ld, 1);
+        setenv("TERMINFO", terminfo, 1);
+        setenv("PYTHONHOME", pyhome, 1);
+      }
+
+      // Stage 3: give tools a Termux-like layout. HOME is the writable home,
+      // PREFIX points at the userland root, TMPDIR is app-private scratch,
+      // and ENV makes `sh -i` source our profile (PATH/PS1/fetch helper).
+      // 3a: SSL_CERT_FILE (+ aliases) points at the bundled Mozilla CA bundle
+      // so HTTPS verifies even though the app sandbox has no system CA store.
+      {
+        char home[PATH_MAX], tmp[PATH_MAX], env[PATH_MAX], ca[PATH_MAX];
+        snprintf(home, sizeof(home), "%s/home", userland);
+        snprintf(tmp, sizeof(tmp), "%s/tmp", userland);
+        snprintf(env, sizeof(env), "%s/etc/profile", userland);
+        snprintf(ca, sizeof(ca), "%s/etc/ssl/certs/ca-certificates.crt",
+                 userland);
+        setenv("HOME", home, 1);
+        setenv("PREFIX", userland, 1);
+        setenv("TMPDIR", tmp, 1);
+        setenv("ENV", env, 1);
+        setenv("SSL_CERT_FILE", ca, 1);
+        setenv("CURL_CA_BUNDLE", ca, 1);
+        setenv("REQUESTS_CA_BUNDLE", ca, 1);
+      }
 
       // ash only expands \w/\$ PS1 when it is a login/interactive shell with
       // a profile; keep the prompt simple and predictable.

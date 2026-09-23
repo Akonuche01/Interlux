@@ -1,0 +1,4 @@
+# Interlux userland: ~4.6k Linux binaries + scripts shipped as APK assets and
+# executed byte-for-byte on Android. Git must NEVER touch line endings here:
+# a CRLF-converted shell script or ELF would break on-device. Keep LF always.
+* -text

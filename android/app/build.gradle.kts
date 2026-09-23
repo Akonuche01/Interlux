@@ -27,9 +27,23 @@ android {
         packaging.jniLibs.useLegacyPackaging = true
         applicationId = "com.keneristudios.interlux"
         minSdk = 24
-        targetSdk = 36
+        // targetSdk stays 28 ON PURPOSE (same as Termux). Verified by bisection
+        // on-device (Android 15, 2026-09-23): targetSdk 29..36 -> execv of any
+        // file under filesDir fails with EACCES (silent, no avc on user builds),
+        // which kills the pty shell, proot, node, python — everything. 28 works.
+        // compileSdk stays modern; distribution is sideload, not Play.
+        targetSdk = 28
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+    }
+
+    // Our userland bundles real Linux trees (npm's node_modules, python's
+    // stdlib) that contain underscore-prefixed dirs (__generated__,
+    // __phello__). AGP's default ignoreAssetsPattern drops `<dir>_*`, which
+    // would silently delete npm's sigstore bindings. Keep every other default
+    // exclusion, drop only the underscore-dir rule.
+    aaptOptions {
+        ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~"
     }
 
     buildTypes {

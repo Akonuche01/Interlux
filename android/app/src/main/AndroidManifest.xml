@@ -1,4 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Stage 3: userland downloads extra tools at runtime via busybox wget.
+         Native sockets need the app-level INTERNET permission on Android. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <application
         android:label="Interlux"
         android:name=".InterluxApplication"
