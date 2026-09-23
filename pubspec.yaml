@@ -1,13 +1,14 @@
 name: interlux
 description: "A modern terminal for Android."
 publish_to: 'none'
-version: 0.3.1+4
+version: 0.4.1+6
 
 environment:
   sdk: ^3.13.0
 
 dependencies:
   xterm: ^4.0.0
+  shared_preferences: ^2.5.3
   flutter:
     sdk: flutter
 

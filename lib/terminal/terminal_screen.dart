@@ -1,9 +1,10 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:xterm/xterm.dart';
 
-import 'pty_service.dart';
+import 'terminal_session.dart';
+import '../pentest/target.dart';
+import '../pentest/targets_screen.dart';
+import '../pentest/targets_store.dart';
 
 /// A full-screen interactive terminal backed by a real shell.
 ///
@@ -24,70 +25,94 @@ class TerminalScreen extends StatefulWidget {
 }
 
 class _TerminalScreenState extends State<TerminalScreen> {
-  late final Terminal _terminal;
-  final PtyService _pty = PtyService();
-  final TerminalController _controller = TerminalController();
-
-  StreamSubscription<String>? _outputSub;
-  StreamSubscription<void>? _exitedSub;
-  bool _errorShown = false;
+  final List<TerminalSession> _sessions = [];
+  int _activeIndex = 0;
+  final TargetsStore _targetsStore = TargetsStore();
 
   /// Sticky modifiers for the extra-keys bar (Termux-style).
   bool _ctrlHeld = false;
   bool _altHeld = false;
 
-  static const _fallbackCols = 80;
-  static const _fallbackRows = 24;
+  TerminalSession get _active => _sessions[_activeIndex];
 
   @override
   void initState() {
     super.initState();
-
-    _terminal = Terminal(maxLines: 5000);
-
-    // Keystrokes and pasted text go to the shell.
-    _terminal.onOutput = (data) {
-      _pty.write(data);
-    };
-
-    _boot();
+    _targetsStore.load();
+    _addSession();
   }
 
-  Future<void> _boot() async {
-    // Start the shell, then size it to the grid the emulator settled on.
-    try {
-      await _pty.start();
-    } catch (e) {
-      _showError('Could not start the terminal: $e');
+  void _addSession({String? run}) {
+    final session = TerminalSession();
+    session.addListener(_onSessionChanged);
+    setState(() {
+      _sessions.add(session);
+      _activeIndex = _sessions.length - 1;
+    });
+    session.boot().then((_) {
+      // The pty buffers early input, so auto-running a scan command here
+      // is safe even if the shell hasn't printed its first prompt yet.
+      if (run != null && run.isNotEmpty) session.pty.write('$run\n');
+    });
+  }
+
+  void _closeSession(int index) {
+    if (_sessions.length == 1) {
+      // Never leave the user with no terminal: reset the last tab.
+      final fresh = TerminalSession();
+      fresh.addListener(_onSessionChanged);
+      final old = _sessions[0];
+      old.removeListener(_onSessionChanged);
+      setState(() {
+        _sessions[0] = fresh;
+        _activeIndex = 0;
+      });
+      old.dispose();
+      fresh.boot();
       return;
     }
-
-    _outputSub = _pty.output.listen((data) {
-      _terminal.write(data);
-    });
-
-    _exitedSub = _pty.exited.listen((_) {
-      if (mounted && !_errorShown) {
-        _showError('The shell exited.');
+    final removed = _sessions[index];
+    removed.removeListener(_onSessionChanged);
+    setState(() {
+      _sessions.removeAt(index);
+      if (_activeIndex >= _sessions.length) {
+        _activeIndex = _sessions.length - 1;
       }
     });
+    removed.dispose();
+  }
 
-    _terminal.resize(
-      _terminal.viewWidth.isFinite && _terminal.viewWidth > 0
-          ? _terminal.viewWidth
-          : _fallbackCols,
-      _terminal.viewHeight.isFinite && _terminal.viewHeight > 0
-          ? _terminal.viewHeight
-          : _fallbackRows,
+  void _onSessionChanged() {
+    final session = _sessions[_activeIndex];
+    if (session.error != null) {
+      _showError('Could not start the terminal: ${session.error}');
+      session.error = null;
+    } else if (session.exited) {
+      _showError('The shell exited (${session.name}).');
+      session.exited = false;
+    }
+    if (mounted) setState(() {});
+  }
+
+  void _openTargets() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TargetsScreen(
+          store: _targetsStore,
+          onLaunch: (PentestTarget target, String command) {
+            _addSession(run: command);
+          },
+        ),
+      ),
     );
-    _pty.resize(_terminal.viewWidth, _terminal.viewHeight);
   }
 
   void _sendExtraKey(_ExtraKey extra) {
     if (extra.text != null) {
-      _pty.write(extra.text!);
+      _active.pty.write(extra.text!);
     } else if (extra.key != null) {
-      _terminal.keyInput(
+      _active.terminal.keyInput(
         extra.key!,
         ctrl: extra.ctrlCombo || _ctrlHeld,
         alt: _altHeld,
@@ -104,7 +129,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
   }
 
   void _showError(String message) {
-    _errorShown = true;
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), duration: const Duration(days: 1)),
@@ -113,24 +137,33 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
   @override
   void dispose() {
-    _outputSub?.cancel();
-    _exitedSub?.cancel();
-    _controller.dispose();
-    _pty.dispose();
+    for (final session in _sessions) {
+      session.removeListener(_onSessionChanged);
+      session.dispose();
+    }
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final active = _active;
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
         child: Column(
           children: [
+            _SessionTabBar(
+              sessions: _sessions,
+              activeIndex: _activeIndex,
+              onSelect: (i) => setState(() => _activeIndex = i),
+              onClose: _closeSession,
+              onAdd: _addSession,
+              onTargets: _openTargets,
+            ),
             Expanded(
               child: TerminalView(
-                _terminal,
-                controller: _controller,
+                active.terminal,
+                controller: active.controller,
                 theme: const TerminalTheme(
             cursor: Color(0xFFE6E6E6),
             selection: Color(0x40E6E6E6),
@@ -174,6 +207,110 @@ class _TerminalScreenState extends State<TerminalScreen> {
   ),
 );
 }
+}
+
+/// Tab strip above the terminal: one chip per session plus a + button.
+/// Long-press (or the ×) closes a tab; closing the last tab resets it.
+class _SessionTabBar extends StatelessWidget {
+  final List<TerminalSession> sessions;
+  final int activeIndex;
+  final void Function(int index) onSelect;
+  final void Function(int index) onClose;
+  final VoidCallback onAdd;
+  final VoidCallback onTargets;
+
+  const _SessionTabBar({
+    required this.sessions,
+    required this.activeIndex,
+    required this.onSelect,
+    required this.onClose,
+    required this.onAdd,
+    required this.onTargets,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xFF111111),
+      height: 40,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        children: [
+          for (var i = 0; i < sessions.length; i++)
+            GestureDetector(
+              onTap: () => onSelect(i),
+              onLongPress: () => onClose(i),
+              child: Container(
+                alignment: Alignment.center,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                margin: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: i == activeIndex
+                      ? const Color(0xFF3A2E5C)
+                      : const Color(0xFF232323),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      sessions[i].name,
+                      style: const TextStyle(
+                        color: Color(0xFFE6E6E6),
+                        fontSize: 13,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    GestureDetector(
+                      onTap: () => onClose(i),
+                      child: const Icon(
+                        Icons.close,
+                        size: 14,
+                        color: Color(0xFF999999),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          GestureDetector(
+            onTap: onAdd,
+            child: Container(
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              margin: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: const Color(0xFF232323),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Icon(
+                Icons.add,
+                size: 16,
+                color: Color(0xFFE6E6E6),
+              ),
+            ),
+          ),
+          GestureDetector(
+            onTap: onTargets,
+            child: Container(
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              margin: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: const Color(0xFF232323),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Icon(
+                Icons.radar,
+                size: 16,
+                color: Color(0xFFE6E6E6),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// One extra key: either a [TerminalKey] (arrows, esc, …) or raw [text].
