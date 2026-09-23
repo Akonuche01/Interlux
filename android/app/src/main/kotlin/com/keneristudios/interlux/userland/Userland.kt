@@ -61,7 +61,19 @@ object Userland {
     // v16 (bash default): + Termux bionic bash 5.3.20 + 43 loadable builtins
     //   (linker64/16KB/NEEDED verified); pty execs bash -i first (BASH_ENV
     //   profile), busybox ash stays as fallback.
-    private const val VERSION = "full-tools-10"
+    // v17 (pkginstall v2): install/remove/upgrade/list/dry-run with version
+    //   DB + file manifests (shared-file safe) replacing the install-only v1.
+    // v18 (pkginstall v2.1): size-mismatch retry; guest-/tmp mapping notes.
+    // v19 (pkginstall v2.2): split resolve/fetch/install — recursive fetch
+    //   echoes polluted captured paths and skipped dep installs.
+    // v20 (pkginstall v2.3): explicit check_size/check_identity params
+    //   (nested sh functions get fresh positional params).
+    // v21 (pkginstall v2.4): rebuild marker — a staging mix-up left a
+    //   half-old script on test devices; forces one clean re-extract.
+    // v22 (pkginstall v2.5): remove uses rmdir (empty-only) — rm -rf on
+    //   manifest dir entries wiped the guest /etc on-device. Directories in
+    //   manifests are now harmless.
+    private const val VERSION = "full-tools-16"
     private const val ASSET_DIR = "userland"
     private const val DIR_NAME = "userland"
 
@@ -366,12 +378,14 @@ object Userland {
     }
 
     /**
-     * pkginstall.sh: wget-based Alpine package installer for the guest.
+     * pkginstall.sh v2: full-lifecycle Alpine package manager for the guest.
      * Proven on-device: apk's own fetcher (mid-download EOF) and db writer
      * both fail under proot, so this resolves so: deps from local APKINDEX
      * copies, downloads with busybox wget, checks size (S:) + .PKGINFO
-     * identity, and extracts the flat .apk tar straight into /.
-     * Run INSIDE the guest: iroot /root/pkginstall.sh <pkgs>
+     * identity, extracts the flat .apk tar straight into /, and tracks
+     * versions + file manifests for remove/upgrade.
+     * Run INSIDE the guest: iroot /root/pkginstall.sh install|remove|
+     * upgrade|list|dry-run <pkgs...>
      */
     private fun writePkginstallScript(dir: File) {
         File(dir, "pkginstall.sh").writeText(
@@ -384,8 +398,16 @@ object Userland {
             IDX_COMM=/tmp/idx-comm
             DL=/tmp/pkgs
             DB=/var/lib/interlux-packages
+            MDIR=/var/lib/interlux-files
             BB=/bin/busybox
-            mkdir -p ${'$'}DL
+            mkdir -p ${'$'}DL ${'$'}MDIR
+            touch ${'$'}DB
+            cmd="${'$'}{1:-list}"; shift || true
+            refresh_indexes() {
+              ${'$'}BB rm -f ${'$'}IDX_MAIN ${'$'}IDX_COMM
+              ${'$'}BB wget -O ${'$'}IDX_MAIN ${'$'}MIRROR/main/aarch64/APKINDEX.tar.gz
+              ${'$'}BB wget -O ${'$'}IDX_COMM ${'$'}MIRROR/community/aarch64/APKINDEX.tar.gz
+            }
             [ -f ${'$'}IDX_MAIN ] || ${'$'}BB wget -O ${'$'}IDX_MAIN ${'$'}MIRROR/main/aarch64/APKINDEX.tar.gz
             [ -f ${'$'}IDX_COMM ] || ${'$'}BB wget -O ${'$'}IDX_COMM ${'$'}MIRROR/community/aarch64/APKINDEX.tar.gz
             dumpidx() {
@@ -405,37 +427,145 @@ object Userland {
               soname=$(echo "${'$'}1" | ${'$'}BB cut -d: -f2 | ${'$'}BB cut -d= -f1)
               dumpidx | ${'$'}BB grep -B60 "p:[^ ]*${'$'}soname" | ${'$'}BB grep '^P:' | ${'$'}BB tail -n1 | ${'$'}BB cut -c3-
             }
-            installed() {
-              ${'$'}BB grep -qx "${'$'}1" ${'$'}DB 2>/dev/null
+            db_version() {
+              ${'$'}BB grep "^${'$'}1 " ${'$'}DB 2>/dev/null | ${'$'}BB head -n1 | ${'$'}BB cut -d' ' -f2 || true
             }
-            done_list=" "
-            fetch_one() {
+            db_record() {
+              ${'$'}BB grep -v "^${'$'}1 " ${'$'}DB 2>/dev/null > ${'$'}DB.new || true
+              echo "${'$'}1 ${'$'}2" >> ${'$'}DB.new
+              ${'$'}BB mv ${'$'}DB.new ${'$'}DB
+            }
+            db_forget() {
+              ${'$'}BB grep -v "^${'$'}1 " ${'$'}DB 2>/dev/null > ${'$'}DB.new || true
+              ${'$'}BB mv ${'$'}DB.new ${'$'}DB
+              ${'$'}BB rm -f ${'$'}MDIR/"${'$'}1"
+            }
+            owned_elsewhere() {
+              # $1=file $2=except-pkg -> 0 if another installed pkg lists it
+              for m in ${'$'}MDIR/*; do
+                [ -f "${'$'}m" ] || continue
+                [ "${'$'}m" = "${'$'}MDIR/${'$'}2" ] && continue
+                if ${'$'}BB grep -qxF "${'$'}1" "${'$'}m" 2>/dev/null; then return 0; fi
+              done
+              return 1
+            }
+            do_resolve() {
+              # $1=pkg -> print closure (deps first, self last), one per line
               case "${'$'}done_list" in *" ${'$'}1 "*) return 0;; esac
-              if installed "${'$'}1"; then done_list="${'$'}done_list${'$'}1 "; return 0; fi
               done_list="${'$'}done_list${'$'}1 "
               s=$(stanza "${'$'}1")
-              if [ -z "${'$'}s" ]; then echo "PKGINSTALL: unknown package ${'$'}1"; return 1; fi
+              if [ -z "${'$'}s" ]; then echo "PKGINSTALL: unknown package ${'$'}1" >&2; return 1; fi
               deps=$(echo "${'$'}s" | ${'$'}BB grep '^D:' | ${'$'}BB tr ' ' '\n' | ${'$'}BB grep '^so:' || true)
               for d in ${'$'}deps; do
                 p=$(provider "${'$'}d")
-                if [ -z "${'$'}p" ]; then echo "PKGINSTALL: no provider for ${'$'}d (needed by ${'$'}1)"; return 1; fi
-                fetch_one "${'$'}p"
+                if [ -z "${'$'}p" ]; then echo "PKGINSTALL: no provider for ${'$'}d (needed by ${'$'}1)" >&2; return 1; fi
+                do_resolve "${'$'}p" || return 1
               done
+              echo "${'$'}1"
+            }
+            do_fetch_one() {
+              # $1=pkg -> download single package, print apk path
+              s=$(stanza "${'$'}1")
               f=$(apkfile "${'$'}s")
               if [ ! -f "${'$'}DL/${'$'}f" ]; then
-                echo "PKGINSTALL: downloading ${'$'}f"
+                echo "PKGINSTALL: downloading ${'$'}f" >&2
                 ${'$'}BB wget -O "${'$'}DL/${'$'}f" "${'$'}MIRROR/main/aarch64/${'$'}f" || ${'$'}BB wget -O "${'$'}DL/${'$'}f" "${'$'}MIRROR/community/aarch64/${'$'}f"
               fi
-              wantsize=$(field "${'$'}s" S)
-              gotsize=$(${'$'}BB wc -c < "${'$'}DL/${'$'}f" | ${'$'}BB tr -d ' ')
-              if [ "${'$'}wantsize" != "${'$'}gotsize" ]; then echo "PKGINSTALL: SIZE MISMATCH ${'$'}f (${'$'}gotsize != ${'$'}wantsize)"; return 1; fi
-              ident=$(${'$'}BB tar -xzOf "${'$'}DL/${'$'}f" .PKGINFO 2>/dev/null | ${'$'}BB grep -E '^(pkgname|pkgver) =' | ${'$'}BB tr '\n' ' ')
-              echo "PKGINSTALL: extracting ${'$'}f [${'$'}ident]"
-              ${'$'}BB tar -xf "${'$'}DL/${'$'}f" -C / --exclude=.SIGN* --exclude=.PKGINFO
-              echo "${'$'}1" >> ${'$'}DB
+              echo "${'$'}DL/${'$'}f"
             }
-            for p in ${'$'}@; do fetch_one "${'$'}p"; done
-            echo "PKGINSTALL: done: ${'$'}@"
+            do_install_file() {
+              # $1=pkg $2=apkpath: verify + extract + record
+              s=$(stanza "${'$'}1")
+              check_size() {
+                # $1=apkpath (explicit: nested functions get fresh params)
+                wantsize=$(field "${'$'}s" S)
+                gotsize=$(${'$'}BB wc -c < "${'$'}1" | ${'$'}BB tr -d ' ')
+                [ "${'$'}wantsize" = "${'$'}gotsize" ]
+              }
+              check_identity() {
+                # $1=apkpath $2=pkgname $3=stanza (explicit: see check_size)
+                id=$(${'$'}BB tar -xzOf "${'$'}1" .PKGINFO 2>/dev/null | ${'$'}BB grep -E '^(pkgname|pkgver) =')
+                echo "${'$'}id" | ${'$'}BB grep -q "pkgname = ${'$'}2\$" && echo "${'$'}id" | ${'$'}BB grep -q "pkgver = $(field "${'$'}3" V)\$"
+              }
+              if ! check_size "${'$'}2"; then
+                # Stale or partial cache: one fresh retry before giving up.
+                echo "PKGINSTALL: re-downloading ${'$'}2 (size mismatch)"
+                f2=$(apkfile "${'$'}s")
+                ${'$'}BB rm -f "${'$'}2"
+                ${'$'}BB wget -O "${'$'}2" "${'$'}MIRROR/main/aarch64/${'$'}f2" || ${'$'}BB wget -O "${'$'}2" "${'$'}MIRROR/community/aarch64/${'$'}f2"
+              fi
+              if ! check_size "${'$'}2"; then echo "PKGINSTALL: SIZE MISMATCH ${'$'}2" >&2; return 1; fi
+              if ! check_identity "${'$'}2" "${'$'}1" "${'$'}s"; then echo "PKGINSTALL: IDENTITY MISMATCH ${'$'}2" >&2; return 1; fi
+              ident=$(${'$'}BB tar -xzOf "${'$'}2" .PKGINFO 2>/dev/null | ${'$'}BB grep -E '^(pkgname|pkgver) =' | ${'$'}BB tr '\n' ' ')
+              echo "PKGINSTALL: extracting ${'$'}2 [${'$'}ident]"
+              ${'$'}BB tar -xf "${'$'}2" -C / --exclude=.SIGN* --exclude=.PKGINFO
+              ${'$'}BB tar -tf "${'$'}2" 2>/dev/null | ${'$'}BB grep -v -E '^(\.SIGN|\.PKGINFO)' | ${'$'}BB sed 's,^\./,,' | ${'$'}BB sort > "${'$'}MDIR/${'$'}1"
+              db_record "${'$'}1" "$(field "${'$'}s" V)"
+            }
+            cmd_install() {
+              done_list=" "
+              closure=""
+              for p in ${'$'}@; do
+                closure="${'$'}closure $(do_resolve "${'$'}p" || return 1)"
+              done
+              for p in ${'$'}closure; do
+                f=$(do_fetch_one "${'$'}p") || return 1
+                do_install_file "${'$'}p" "${'$'}f" || return 1
+              done
+              echo "PKGINSTALL: installed: ${'$'}@"
+            }
+            cmd_remove() {
+              for p in ${'$'}@; do
+                if [ ! -f "${'$'}MDIR/${'$'}p" ]; then echo "PKGINSTALL: not installed: ${'$'}p"; continue; fi
+                # Delete deepest paths first. Directories are only removed when
+                # EMPTY (rmdir): a manifest always lists ancestor dirs (etc/,
+                # usr/), and rm -rf on those would nuke other packages' and
+                # system files. Files owned by other installed packages stay.
+                ${'$'}BB sort -r "${'$'}MDIR/${'$'}p" | while IFS= read -r f; do
+                  [ -n "${'$'}f" ] || continue
+                  if owned_elsewhere "${'$'}f" "${'$'}p"; then continue; fi
+                  if [ -d "/${'$'}f" ] && [ ! -L "/${'$'}f" ]; then
+                    ${'$'}BB rmdir "/${'$'}f" 2>/dev/null || true
+                  else
+                    ${'$'}BB rm -f "/${'$'}f" 2>/dev/null || true
+                  fi
+                done
+                db_forget "${'$'}p"
+                echo "PKGINSTALL: removed: ${'$'}p"
+              done
+            }
+            cmd_upgrade() {
+              refresh_indexes
+              changed=0
+              for rec in $( ${'$'}BB cut -d' ' -f1 ${'$'}DB 2>/dev/null || true ); do
+                [ -n "${'$'}rec" ] || continue
+                s=$(stanza "${'$'}rec")
+                [ -n "${'$'}s" ] || continue
+                if [ "$(field "${'$'}s" V)" != "$(db_version "${'$'}rec")" ]; then
+                  echo "PKGINSTALL: upgrading ${'$'}rec"
+                  cmd_install "${'$'}rec" || return 1
+                  changed=1
+                fi
+              done
+              [ "${'$'}changed" = "0" ] && echo "PKGINSTALL: everything up to date"
+            }
+            cmd_dry_run() {
+              done_list=" "
+              for p in ${'$'}@; do
+                closure=$(do_resolve "${'$'}p") || return 1
+                for q in ${'$'}closure; do
+                  echo "PKGINSTALL: would install ${'$'}q"
+                done
+              done
+            }
+            case "${'$'}cmd" in
+              install) cmd_install ${'$'}@;;
+              remove) cmd_remove ${'$'}@;;
+              upgrade) cmd_upgrade;;
+              list) ${'$'}BB cat ${'$'}DB 2>/dev/null || true;;
+              dry-run) cmd_dry_run ${'$'}@;;
+              *) echo "usage: pkginstall.sh install|remove|upgrade|list|dry-run <pkgs...>" >&2; exit 1;;
+            esac
             """.trimIndent() + "\n"
         )
         File(dir, "pkginstall.sh").setExecutable(true, false)

@@ -37,9 +37,11 @@ Evidence = boot-log line, screenshot, or `flutter test` — never "should work".
 
 ## Phase 2 — Package parity (install anything, update everything)
 
-5. [ ] pkginstall v2: full dependency solver already shipping (so: mapping);
-    add removal tracking, upgrades (index refresh + version compare),
-    `--dry-run` list. Done-when: install/remove/upgrade nmap round-trip.
+5. [x] pkginstall v2: full lifecycle (install/remove/upgrade/list/dry-run).
+    Proven 2026-09-23 on-device: whois install (+dep closure) → remove
+    (binary gone, shared libs + /etc kept via rmdir-only rule — an rm -rf
+    version wiped guest /etc first, caught and fixed) → reinstall → upgrade
+    no-op → versioned DB. so: resolution, size+.PKGINFO checks, manifests.
 6. [ ] Bionic-native index (Termux .deb metadata → install/upgrade node,
     python, git…). Done-when: one command upgrades the power set in place.
 7. [ ] GPG/index signature verification (today: size+identity only).
