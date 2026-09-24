@@ -11,6 +11,8 @@
     <!-- Phase 1.3: targetSdk 28 legacy storage -> broad /sdcard as ~/storage. -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <!-- Phase 3.11: haptics for scan events (install-time grant). -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <application
         android:label="Interlux"
         android:name=".InterluxApplication"

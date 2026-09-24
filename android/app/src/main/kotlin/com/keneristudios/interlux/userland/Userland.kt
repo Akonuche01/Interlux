@@ -87,7 +87,11 @@ object Userland {
     // v28 (ssh-host.sh): guest sshd manager (start/stop/status); bionic sshd
     //   unfixable (NSS wall) — documented, guest path proven with live SFTP.
     // v29 (distro.sh): named Alpine guests + snapshots; iroot takes a name.
-    private const val VERSION = "full-tools-23"
+    // v30 (shebangs): rewrite 78 Termux-baked #! lines to /system interpreters
+    //   (npm/yarn/git-helpers/pydoc were dead); +x on rewritten helpers.
+    // v31 (openssl cnf): OPENSSL_CONF=/dev/null — node fatals on the unreadable
+    //   Termux-baked default at first crypto use (npm/npx/yarn dead).
+    private const val VERSION = "full-tools-25"
     private const val ASSET_DIR = "userland"
     private const val DIR_NAME = "userland"
 
@@ -155,10 +159,11 @@ object Userland {
                 copyAssetTree(context, "$ASSET_DIR/$tree", File(dir, tree))
             }
             fixExecBits(dir)
+            val shebangs = fixShebangs(dir)
             val links = createSymlinks(context, dir)
             marker.writeText(VERSION)
             com.keneristudios.interlux.BootTracer.stepPublic(
-                "userland: assets copied, symlinks=$links"
+                "userland: assets copied, symlinks=$links shebangs=$shebangs"
             )
         } catch (e: Exception) {
             com.keneristudios.interlux.BootTracer.stepPublic(
@@ -234,6 +239,7 @@ object Userland {
             export SSL_CERT_FILE="${dir.absolutePath}/etc/ssl/certs/ca-certificates.crt"
             export CURL_CA_BUNDLE="${'$'}SSL_CERT_FILE"
             export REQUESTS_CA_BUNDLE="${'$'}SSL_CERT_FILE"
+            export OPENSSL_CONF=/dev/null
             # fetch <url> <out>: curl first (real TLS), busybox wget fallback.
             fetch() {
               if [ -x "${dir.absolutePath}/curl" ]; then
@@ -1094,6 +1100,60 @@ object Userland {
                 }
             }
         }
+    }
+
+    /**
+     * Rewrite Termux-baked shebang lines (78 files: `#!/data/data/com.termux/
+     * files/usr/bin/X`) to interpreters that exist here. Without this, npm,
+     * yarn, git helpers, pydoc and friends die with "Permission denied".
+     * `sh` maps straight to /system/bin/sh; everything else goes through
+     * /system/bin/env so our $PREFIX/bin wins via PATH. Rewritten files get
+     * +x (covers node_modules/.bin-style helpers fixExecBits never sees).
+     * Returns the count rewritten (logged to the boot log).
+     */
+    private fun fixShebangs(dir: File): Int {
+        var fixed = 0
+        val prefix = "#!/data/data/com.termux/files/usr/bin/"
+        val altPrefix = "#! /data/data/com.termux/files/usr/bin/"
+        for (tree in listOf("bin", "lib", "libexec", "share", "etc")) {
+            File(dir, tree).walkTopDown().forEach { file ->
+                try {
+                    if (!file.isFile || file.length() > 1_000_000) return@forEach
+                    val bytes = file.readBytes()
+                    val nl = bytes.indexOf('\n'.code.toByte())
+                    if (nl < 0) return@forEach
+                    var first = String(bytes, 0, nl, Charsets.UTF_8)
+                    val tool: List<String>
+                    when {
+                        first.startsWith(prefix) -> first = first.removePrefix(prefix)
+                        first.startsWith(altPrefix) -> first = first.removePrefix(altPrefix)
+                        else -> return@forEach
+                    }
+                    tool = first.split(Regex("\\s+")).filter { it.isNotEmpty() }
+                    if (tool.isEmpty()) return@forEach
+                    // Drop a leading `env` (it only re-dispatches by PATH);
+                    // route everything else through env so $PREFIX/bin wins.
+                    val cmd = if (tool[0] == "env") tool.drop(1) else tool
+                    if (cmd.isEmpty()) return@forEach
+                    val replacement = if (cmd[0] == "sh") {
+                        "#!/system/bin/sh " + cmd.drop(1).joinToString(" ").trim()
+                    } else {
+                        "#!/system/bin/env " + cmd.joinToString(" ")
+                    }
+                    val rest = if (nl + 1 < bytes.size) {
+                        bytes.copyOfRange(nl, bytes.size)
+                    } else {
+                        "\n".toByteArray()
+                    }
+                    val out = replacement.toByteArray() + rest
+                    file.writeBytes(out)
+                    file.setExecutable(true, false)
+                    fixed++
+                } catch (_: Throwable) {
+                }
+            }
+        }
+        return fixed
     }
 
     /**

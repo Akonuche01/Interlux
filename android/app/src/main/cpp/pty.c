@@ -122,6 +122,11 @@ Java_com_keneristudios_interlux_pty_Pty_nativeCreate(JNIEnv *env, jobject thiz,
         setenv("SSL_CERT_FILE", ca, 1);
         setenv("CURL_CA_BUNDLE", ca, 1);
         setenv("REQUESTS_CA_BUNDLE", ca, 1);
+        // OpenSSL's default config lives at a Termux-baked path that is
+        // unreadable here; node treats that as FATAL at crypto init. Point
+        // it at /dev/null (empty config, system defaults). Users can export
+        // their own OPENSSL_CONF to override.
+        setenv("OPENSSL_CONF", "/dev/null", 1);
       }
 
       // Bash reads BASH_ENV for interactive non-login shells, so point it

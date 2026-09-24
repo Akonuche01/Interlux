@@ -7,6 +7,7 @@ import '../pentest/target.dart';
 import '../pentest/targets_screen.dart';
 import '../pentest/targets_store.dart';
 import '../power/battery_opt.dart';
+import '../device/device_api.dart';
 import '../storage/setup_storage.dart';
 
 /// A full-screen interactive terminal backed by a real shell.
@@ -122,6 +123,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
           store: _targetsStore,
           onLaunch: (PentestTarget target, String command) {
             _addSession(run: command, targetLabel: target.label);
+            DeviceApi.notify('Scan started on ${target.label}', command);
+            DeviceApi.vibrate(60);
           },
         ),
       ),

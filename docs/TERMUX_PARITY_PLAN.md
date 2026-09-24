@@ -1,5 +1,22 @@
 # Interlux — Termux parity, then beyond
 
+## Scoreboard (2026-09-24, device-proven only)
+
+| Phase | Done | Score |
+|---|---|---|
+| 1 — Survival (service, battery, storage, bash) | 4/4 | 100% |
+| 2 — Packages (solver, index, signatures) | 3/3 | 100% |
+| 3 — Ecosystem (runtimes, sshd, distros, APIs, boot, editors) | 3.5/6 | ~60% |
+| 4 — Surpass (agent, suite, UX, safety, perf) | 1.5/5 | ~30% |
+| Terminal UX bonus track (tabs, keys, targets, reports) | 4/4 | 100% |
+| **Overall toward strict parity** | | **~70%** |
+
+Remaining parity gaps: boot persistence, emacs/tmux bundled, Termux:API
+breadth (camera/TTS/location), X11/GUI, Perl-module/Ruby-gem depth.
+Ahead of Termux already: Kali-rootless guest + manager, attested targets
+with consent ledger, shareable reports, AI-agent scaffolding (API + audit
+shape), 16KB-first binaries, sshd manager.
+
 Goal, in order: (1) do everything Termux does, (2) fix what Termux lacks,
 (3) build what is latest (AI-operated, pentest-ready terminal).
 This doc is the checklist. Items move only when their acceptance holds
@@ -87,8 +104,15 @@ Evidence = boot-log line, screenshot, or `flutter test` — never "should work".
     notifications, camera, TTS — behind explicit per-call permission UI.
 12. [ ] Boot persistence: start sessions/service after reboot (opt-in).
 13. [ ] Editor story: emacs + tmux + terminfo-complete (terminfo DB already ships).
+    Update: tmux 3.7c proven via `pkg.sh` (install+run+remove round-trip);
+    emacs still open.
 
 ## Phase 4 — Surpass (what Termux lacks, what's latest)
+
+Proven early (2026-09-24): npm 11.20.0 / npx / yarn 1.22.22 run clean
+(`npm ls -g` verified). Two latent tree-wide bugs fixed for it: 78
+Termux-baked shebangs rewritten at extract, and OPENSSL_CONF=/dev/null
+(node fatals on the unreadable baked default at first crypto use).
 
 14. [ ] AI agent operator: tool-calling loop over the shell, audit log of every
     command+output, approve-per-command → approve-per-session, target allowlist,

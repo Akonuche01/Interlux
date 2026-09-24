@@ -18,6 +18,7 @@ class MainActivity : FlutterActivity() {
         BootTracer.step("configureFlutterEngine")
         TerminalService.start(applicationContext)
         PowerGate(flutterEngine.dartExecutor.binaryMessenger, applicationContext)
+        DeviceApi(flutterEngine.dartExecutor.binaryMessenger, applicationContext)
         storageGate = StorageGate(flutterEngine.dartExecutor.binaryMessenger, this)
         Pty(flutterEngine.dartExecutor.binaryMessenger, applicationContext)
     }
