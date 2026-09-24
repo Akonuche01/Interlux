@@ -82,7 +82,9 @@ object Userland {
     //   (cut -c3- only fits 1-letter keys); URL-encode +/: in .deb URLs.
     // v26 (pkg.sh fixes III): busybox tar needs space-form --strip-components
     //   and count 6 (leading ./ counts); =5 form silently extracts nothing.
-    private const val VERSION = "full-tools-20"
+    // v27 (pkg.sh signatures): SHA256 from the index verified per .deb (TLS
+    //   index + hash chain); tampered mirrors refused. Threat model in plan.
+    private const val VERSION = "full-tools-21"
     private const val ASSET_DIR = "userland"
     private const val DIR_NAME = "userland"
 
@@ -736,13 +738,23 @@ object Userland {
               s=$(stanza "${'$'}1")
               f=$(debfile "${'$'}s")
               b=$(${'$'}BB basename "${'$'}f")
-              if [ ! -f "${'$'}DL/${'$'}b" ]; then
+              want=$(field "${'$'}s" SHA256)
+              check_hash() {
+                # $1=debpath (explicit): index SHA256 must match, when known
+                [ -z "${'$'}want" ] && return 0
+                got=$(${'$'}BB sha256sum "${'$'}1" | ${'$'}BB cut -d' ' -f1)
+                [ "${'$'}want" = "${'$'}got" ]
+              }
+              if [ ! -f "${'$'}DL/${'$'}b" ] || ! check_hash "${'$'}DL/${'$'}b"; then
+                if [ -f "${'$'}DL/${'$'}b" ]; then echo "PKG: hash mismatch, re-downloading ${'$'}b" >&2; fi
                 echo "PKG: downloading ${'$'}b" >&2
                 # .deb filenames contain + and : (version epochs) which curl
                 # rejects raw; busybox wget takes them as-is.
                 urlpath=$(echo "${'$'}f" | ${'$'}BB sed 's/+/%2B/g; s/:/%3A/g')
+                ${'$'}BB rm -f "${'$'}DL/${'$'}b"
                 fetch_url "${'$'}REPO/${'$'}urlpath" "${'$'}DL/${'$'}b" || return 1
               fi
+              if ! check_hash "${'$'}DL/${'$'}b"; then echo "PKG: SHA256 MISMATCH ${'$'}b (tampered mirror?)" >&2; return 1; fi
               echo "${'$'}DL/${'$'}b"
             }
             do_install_file() {

@@ -50,7 +50,16 @@ Evidence = boot-log line, screenshot, or `flutter test` — never "should work".
     stanza field, full-key field() strip, strip-components 6, version bump
     required for script refreshes. Note: upgrade pulled real
     libandroid-selinux into lib/ (stub at root still wins LD order; tidy later).
-7. [ ] GPG/index signature verification (today: size + identity only).
+7. [x] Index signature verification (TLS index + per-file hashes).
+    Proven 2026-09-23 on-device: bionic `pkg.sh` verifies index SHA256 per
+    .deb; a deliberately corrupted tree .deb was detected, re-downloaded
+    fresh, and only verified bytes installed (`tree v2.3.2` runs). Threat
+    model: TLS-verified index is the trust anchor; persistent bad bits get
+    a loud SHA256 MISMATCH refusal. Guest side: size + .PKGINFO identity.
+    Finding: Alpine APKINDEX c:/C: fields do NOT match whole-file hashes
+    (proven across dl-cdn + kernel.org mirrors serving identical bytes),
+    so they can't anchor file verification — full .SIGN checking would
+    need guest openssl and stays a future item.
     Done-when: tampered .apk is refused with a clear error.
 
 ## Phase 3 — Ecosystem parity (daily-driver completeness)
