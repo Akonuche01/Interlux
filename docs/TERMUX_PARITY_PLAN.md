@@ -102,7 +102,12 @@ Evidence = boot-log line, screenshot, or `flutter test` — never "should work".
     ~/.rootfs untouched. Debian/Kali await proot-ready tarball URLs.
 11. [ ] Device-API bridge (Termux:API equivalent): battery, clipboard,
     notifications, camera, TTS — behind explicit per-call permission UI.
-12. [ ] Boot persistence: start sessions/service after reboot (opt-in).
+12. [x] Boot persistence: start sessions/service after reboot (opt-in).
+    Proven 2026-09-24 without rebooting: TEMP test action drove the identical
+    onReceive path (BOOT_COMPLETED is shell-protected) — boot log shows
+    "reboot detected" → service onCreate+started from a dead process.
+    Test hook removed after proof. Semantics: service runs iff the app was
+    opened at least once since boot; Stop halts until next launch.
 13. [ ] Editor story: emacs + tmux + terminfo-complete (terminfo DB already ships).
     Update: tmux 3.7c proven via `pkg.sh` (install+run+remove round-trip);
     emacs still open.

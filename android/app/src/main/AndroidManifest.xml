@@ -13,6 +13,9 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <!-- Phase 3.11: haptics for scan events (install-time grant). -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Phase 3.12: restart the terminal service after reboot (opt-out via
+         the notification Stop action until next launch). -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <application
         android:label="Interlux"
         android:name=".InterluxApplication"
@@ -43,6 +46,13 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Interactive terminal shells the user left running in the background." />
         </service>
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
