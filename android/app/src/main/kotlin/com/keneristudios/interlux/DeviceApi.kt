@@ -7,28 +7,43 @@ import android.app.PendingIntent
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.location.LocationManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
+import java.util.Locale
 
 /**
  * Device-API bridge, Termux:API-style (Phase 3.11).
  *
- * v1, no new permissions needed (targetSdk 28 grants notification +
- * vibration at install; clipboard reads show the OS toast themselves):
- * battery level, clipboard get/set, local notifications, haptic buzz.
- * Camera/TTS/location stay future items. Shell-CLI bindings are a separate
- * future item; this surface is for the app UI and the Stage-6 AI agent.
+ * v1: battery level, clipboard get/set, local notifications, haptic buzz
+ * (no new permissions on targetSdk 28; clipboard reads show the OS toast).
+ * v2: TTS speak/stop (system engine, no permission), last-known location
+ * (needs location permission — request via requestLocation), photo capture
+ * delegated to the system camera app (no camera permission needed by us;
+ * result delivered as a file path via MainActivity's launcher).
+ * Shell-CLI bindings are a separate future item; this surface is for the
+ * app UI and the Stage-6 AI agent.
  */
-class DeviceApi(messenger: BinaryMessenger, private val context: Context) :
-    MethodChannel.MethodCallHandler {
+class DeviceApi(
+    messenger: BinaryMessenger,
+    private val context: Context,
+    private val photoLauncher: (output: File, cb: (Boolean) -> Unit) -> Unit,
+    private val locationRequester: (cb: (Boolean) -> Unit) -> Unit,
+) : MethodChannel.MethodCallHandler {
 
     private val channel = MethodChannel(messenger, "interlux/device")
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    private val ttsQueue = ArrayDeque<String>()
 
     init {
         channel.setMethodCallHandler(this)
@@ -67,7 +82,86 @@ class DeviceApi(messenger: BinaryMessenger, private val context: Context) :
                 vibrate(ms)
                 result.success(true)
             }
+            "ttsSpeak" -> {
+                speak(call.argument<String>("text") ?: "")
+                result.success(true)
+            }
+            "ttsStop" -> {
+                try {
+                    tts?.stop()
+                } catch (_: Throwable) {
+                }
+                result.success(true)
+            }
+            "lastLocation" -> {
+                result.success(lastLocation())
+            }
+            "requestLocation" -> {
+                locationRequester { granted ->
+                    result.success(granted)
+                }
+            }
+            "capturePhoto" -> {
+                val out = File(
+                    context.getExternalFilesDir(null),
+                    "photo-${System.currentTimeMillis()}.jpg",
+                )
+                photoLauncher(out) { ok ->
+                    result.success(if (ok && out.exists()) out.absolutePath else null)
+                }
+            }
             else -> result.notImplemented()
+        }
+    }
+
+    /** Fire-and-forget speech; engine init is async so early text queues. */
+    private fun speak(text: String) {
+        if (text.isBlank()) return
+        try {
+            val engine = tts ?: TextToSpeech(context) { status ->
+                if (status == TextToSpeech.SUCCESS) {
+                    ttsReady = true
+                    tts?.language = Locale.getDefault()
+                    val pending = ArrayList(ttsQueue)
+                    ttsQueue.clear()
+                    for (line in pending) speakNow(line)
+                }
+            }.also { tts = it }
+            if (ttsReady) {
+                speakNow(text)
+            } else {
+                ttsQueue.add(text)
+                engine.toString()
+            }
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun speakNow(text: String) {
+        try {
+            tts?.speak(text, TextToSpeech.QUEUE_ADD, null, "interlux-${System.nanoTime()}")
+        } catch (_: Throwable) {
+        }
+    }
+
+    /** Last-known fix from any provider; null when nothing cached/allowed. */
+    private fun lastLocation(): Map<String, Double>? {
+        return try {
+            val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val providers = lm.getProviders(true)
+            var best: android.location.Location? = null
+            for (name in providers) {
+                try {
+                    @Suppress("MissingPermission")
+                    val loc = lm.getLastKnownLocation(name) ?: continue
+                    if (best == null || (loc.time > best.time)) best = loc
+                } catch (_: SecurityException) {
+                    return null
+                }
+            }
+            best?.let { mapOf("lat" to it.latitude, "lon" to it.longitude, "acc" to it.accuracy.toDouble()) }
+        } catch (_: Throwable) {
+            null
         }
     }
 

@@ -100,8 +100,11 @@ Evidence = boot-log line, screenshot, or `flutter test` — never "should work".
     `distro.sh` full cycle (create lab → list → snapshot → remove →
     restore → remove, all clean) + named guest boots 3.24.2. Default
     ~/.rootfs untouched. Debian/Kali await proot-ready tarball URLs.
-11. [ ] Device-API bridge (Termux:API equivalent): battery, clipboard,
+11. [x] Device-API bridge (Termux:API equivalent): battery, clipboard,
     notifications, camera, TTS — behind explicit per-call permission UI.
+    Proven 2026-09-24 live on-device (boss-tested): battery, clipboard
+    round-trip, notify, vibrate, TTS speak, location permission granted,
+    photo capture returning a real .jpg. Shell-CLI bindings stay future.
 12. [x] Boot persistence: start sessions/service after reboot (opt-in).
     Proven 2026-09-24 without rebooting: TEMP test action drove the identical
     onReceive path (BOOT_COMPLETED is shell-protected) — boot log shows

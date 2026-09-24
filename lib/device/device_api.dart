@@ -52,4 +52,52 @@ class DeviceApi {
       // No vibrator; not fatal.
     }
   }
+
+  /// Speak text aloud via the system TTS engine (queued, fire-and-forget).
+  static Future<void> ttsSpeak(String text) async {
+    try {
+      await _channel.invokeMethod<bool>('ttsSpeak', {'text': text});
+    } catch (_) {
+      // No TTS engine; not fatal.
+    }
+  }
+
+  static Future<void> ttsStop() async {
+    try {
+      await _channel.invokeMethod<bool>('ttsStop');
+    } catch (_) {
+      // No TTS engine; not fatal.
+    }
+  }
+
+  /// Last-known fix as {lat, lon, acc}, or null when unavailable/denied.
+  static Future<Map?> lastLocation() async {
+    try {
+      final m = await _channel.invokeMapMethod<String, double>(
+        'lastLocation',
+      );
+      return m;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Ask for location permission via the system dialog. Returns granted?
+  static Future<bool> requestLocation() async {
+    try {
+      return await _channel.invokeMethod<bool>('requestLocation') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Capture a photo with the system camera app. Returns the saved file
+  /// path, or null if cancelled/unavailable.
+  static Future<String?> capturePhoto() async {
+    try {
+      return await _channel.invokeMethod<String>('capturePhoto');
+    } catch (_) {
+      return null;
+    }
+  }
 }
