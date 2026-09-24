@@ -64,10 +64,25 @@ Evidence = boot-log line, screenshot, or `flutter test` — never "should work".
 
 ## Phase 3 — Ecosystem parity (daily-driver completeness)
 
-8. [ ] More runtimes: ruby, perl, php, Go toolchain (bionic builds, 16KB-checked).
-9. [ ] sshd server flow (host keys, password auth, `sshd` on 8022) + SFTP.
-10. [ ] proot-distro manager: named guests (Alpine, Debian, Kali-rootless),
-    login shortcuts, guest snapshot/reset.
+8. [x] More runtimes: ruby, perl, php, Go toolchain (bionic builds, 16KB-checked).
+    Proven 2026-09-23/24 on-device, all via pkg.sh (zero APK bloat):
+    ruby 4.0.6, perl v5.42.2, PHP 8.5.1, Go 1.27.1 android/arm64
+    (+clang 21/llvm/ndk-sysroot closure). Crown proof: compiled + ran a
+    Go hello-world ON the phone. Next runtime candidates (unverified):
+    rust (125MB+clang), openjdk.
+9. [x] sshd server flow (host keys, password auth, `sshd` on 8022) + SFTP.
+    Proven 2026-09-24 on-device: guest Alpine openssh (key auth, root),
+    live exec + SFTP file get, managed by `ssh-host.sh start|stop|status`.
+    Key finding: bionic sshd can NEVER work — bionic NSS synthesizes users
+    and ignores /etc/passwd files (proven via getpwnam probes), so no
+    account can resolve. Guest musl has a real passwd DB. Bionic client
+    works (`-S` flag needed: Termux-baked ssh path). Base `sshd_config`
+    overridable knobs used: SshdSessionPath/SshdAuthPath/ModuliFile.
+10. [x] proot-distro manager: named guests (Alpine, Debian, Kali-rootless),
+    login shortcuts, guest snapshot/reset. Proven 2026-09-24 on-device:
+    `distro.sh` full cycle (create lab → list → snapshot → remove →
+    restore → remove, all clean) + named guest boots 3.24.2. Default
+    ~/.rootfs untouched. Debian/Kali await proot-ready tarball URLs.
 11. [ ] Device-API bridge (Termux:API equivalent): battery, clipboard,
     notifications, camera, TTS — behind explicit per-call permission UI.
 12. [ ] Boot persistence: start sessions/service after reboot (opt-in).

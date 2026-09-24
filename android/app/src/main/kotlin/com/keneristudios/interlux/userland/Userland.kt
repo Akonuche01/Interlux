@@ -84,7 +84,10 @@ object Userland {
     //   and count 6 (leading ./ counts); =5 form silently extracts nothing.
     // v27 (pkg.sh signatures): SHA256 from the index verified per .deb (TLS
     //   index + hash chain); tampered mirrors refused. Threat model in plan.
-    private const val VERSION = "full-tools-21"
+    // v28 (ssh-host.sh): guest sshd manager (start/stop/status); bionic sshd
+    //   unfixable (NSS wall) — documented, guest path proven with live SFTP.
+    // v29 (distro.sh): named Alpine guests + snapshots; iroot takes a name.
+    private const val VERSION = "full-tools-23"
     private const val ASSET_DIR = "userland"
     private const val DIR_NAME = "userland"
 
@@ -255,8 +258,9 @@ object Userland {
             # in and cannot find its ELF loaders otherwise. TMP_DIR avoids the
             # f2fs-probe failure; NO_SECCOMP avoids filter quirks as app.
             iroot() {
-              R="${dir.absolutePath}/home/.rootfs"
-              if [ ! -d "${'$'}R" ]; then echo "no guest: run rootfs.sh install first"; return 1; fi
+              if [ -n "${'$'}1" ]; then R="${dir.absolutePath}/home/.guests/${'$'}1"; else R="${dir.absolutePath}/home/.rootfs"; fi
+              if [ ! -d "${'$'}R" ]; then echo "no such guest (run rootfs.sh install, or distro.sh create)"; return 1; fi
+              shift || true
               LD_LIBRARY_PATH="${dir.absolutePath}" PROOT_TMP_DIR="${dir.absolutePath}/tmp" PROOT_LOADER="${dir.absolutePath}/libexec/proot/loader" PROOT_LOADER_32="${dir.absolutePath}/libexec/proot/loader32" PROOT_NO_SECCOMP=1 "${dir.absolutePath}/proot" -r "${'$'}R" -0 -b /dev -b /proc -b /sys -b "${dir.absolutePath}/home:/root/host" -w /root /bin/sh --login ${'$'}@
             }
             """.trimIndent() + "\n"
@@ -347,6 +351,96 @@ object Userland {
         )
         File(dir, "rootfs.sh").setExecutable(true, false)
         writePkginstallScript(dir)
+        writeDistroScript(dir)
+    }
+
+    /**
+     * distro.sh: named-guest manager (create|list|enter|remove|snapshot|
+     * restore|purge). The default ~/.rootfs guest stays untouched (back-
+     * compat); named guests live under ~/.guests/<name>. Snapshots are plain
+     * .tar.gz under ~/.snapshots. Only Alpine minirootfs is bundled as a
+     * source today (same pinned 3.24.2 tarball as rootfs.sh); Debian/Kali
+     * need proot-ready tarball URLs and plug in as new SOURCES entries.
+     */
+    private fun writeDistroScript(dir: File) {
+        File(dir, "distro.sh").writeText(
+            """
+            #!/system/bin/sh
+            # usage: distro.sh create|list|enter|remove|snapshot|restore <name> [file|distro]
+            set -e
+            BB="${dir.absolutePath}/busybox"
+            PREFIX="${dir.absolutePath}"
+            CA="${dir.absolutePath}/etc/ssl/certs/ca-certificates.crt"
+            GUESTS="${dir.absolutePath}/home/.guests"
+            SNAPS="${dir.absolutePath}/home/.snapshots"
+            URL_ALPINE="https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/aarch64/alpine-minirootfs-3.24.2-aarch64.tar.gz"
+            SHA_ALPINE="9bf70a7f18ea44094cbb5f70c58f9af129c8214745743db0e68e5502cc2ce773"
+            cmd="${'$'}{1:-list}"; name="${'$'}{2:-}"; arg="${'$'}{3:-alpine}"
+            root_of() { echo "${'$'}GUESTS/${'$'}1"; }
+            case "${'$'}cmd" in
+              list)
+                ${'$'}BB echo "default: ${dir.absolutePath}/home/.rootfs"
+                for g in "${'$'}GUESTS"/*/; do
+                  [ -d "${'$'}g" ] || continue
+                  ${'$'}BB echo "guest: $(${'$'}BB basename "${'$'}g")"
+                done
+                ;;
+              create)
+                [ -n "${'$'}name" ] || { echo "usage: distro.sh create <name> [alpine]" >&2; exit 1; }
+                R=$(root_of "${'$'}name")
+                if [ -d "${'$'}R" ]; then echo "distro: ${'$'}name exists"; exit 0; fi
+                case "${'$'}arg" in alpine) URL="${'$'}URL_ALPINE"; SHA="${'$'}SHA_ALPINE";; *) echo "distro: unknown source ${'$'}arg (only: alpine)" >&2; exit 1;; esac
+                ${'$'}BB mkdir -p "${'$'}R"
+                tmp="${'$'}( "${'$'}BB" mktemp "${dir.absolutePath}/tmp/distro.XXXXXX" )"
+                if [ -x "${'$'}PREFIX/curl" ]; then
+                  LD_LIBRARY_PATH="${'$'}PREFIX" "${'$'}PREFIX/curl" --cacert "${'$'}CA" -L -o "${'$'}tmp" "${'$'}URL"
+                else
+                  "${'$'}BB" wget -O "${'$'}tmp" "${'$'}URL"
+                fi
+                echo "${'$'}SHA  ${'$'}tmp" | "${'$'}BB" sha256sum -c -
+                "${'$'}BB" tar -xzf "${'$'}tmp" -C "${'$'}R"
+                "${'$'}BB" rm -f "${'$'}tmp"
+                echo "3.24.2" > "${'$'}R/.interlux-version"
+                "${'$'}BB" mkdir -p "${'$'}R/etc"
+                printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' > "${'$'}R/etc/resolv.conf"
+                if [ -f "${'$'}PREFIX/pentest.sh" ]; then "${'$'}BB" cp "${'$'}PREFIX/pentest.sh" "${'$'}R/root/pentest.sh"; fi
+                if [ -f "${'$'}PREFIX/pkginstall.sh" ]; then "${'$'}BB" cp "${'$'}PREFIX/pkginstall.sh" "${'$'}R/root/pkginstall.sh"; fi
+                echo "distro: guest ${'$'}name ready — enter with: iroot ${'$'}name"
+                ;;
+              enter)
+                [ -n "${'$'}name" ] || { echo "usage: distro.sh enter <name>" >&2; exit 1; }
+                R=$(root_of "${'$'}name")
+                [ -d "${'$'}R" ] || { echo "distro: no such guest ${'$'}name" >&2; exit 1; }
+                exec iroot "${'$'}name"
+                ;;
+              remove)
+                [ -n "${'$'}name" ] || { echo "usage: distro.sh remove <name>" >&2; exit 1; }
+                R=$(root_of "${'$'}name")
+                "${'$'}BB" rm -rf "${'$'}R"
+                echo "distro: removed ${'$'}name"
+                ;;
+              snapshot)
+                [ -n "${'$'}name" ] || { echo "usage: distro.sh snapshot <name> [file]" >&2; exit 1; }
+                R=$(root_of "${'$'}name")
+                [ -d "${'$'}R" ] || { echo "distro: no such guest ${'$'}name" >&2; exit 1; }
+                out="${'$'}{4:-${'$'}SNAPS/${'$'}name.tar.gz}"
+                ${'$'}BB mkdir -p "${'$'}SNAPS"
+                ${'$'}BB tar -czf "${'$'}out" -C "${'$'}GUESTS" "${'$'}name"
+                echo "distro: snapshot ${'$'}name -> ${'$'}out"
+                ;;
+              restore)
+                [ -n "${'$'}name" ] || { echo "usage: distro.sh restore <name> [file]" >&2; exit 1; }
+                src="${'$'}{4:-${'$'}SNAPS/${'$'}name.tar.gz}"
+                [ -f "${'$'}src" ] || { echo "distro: no snapshot ${'$'}src" >&2; exit 1; }
+                "${'$'}BB" rm -rf "$(root_of "${'$'}name")"
+                "${'$'}BB" tar -xzf "${'$'}src" -C "${'$'}GUESTS"
+                echo "distro: restored ${'$'}name from ${'$'}src"
+                ;;
+              *) echo "usage: distro.sh create|list|enter|remove|snapshot|restore <name>" >&2; exit 1;;
+            esac
+            """.trimIndent() + "\n"
+        )
+        File(dir, "distro.sh").setExecutable(true, false)
     }
 
     /**
@@ -582,6 +676,75 @@ object Userland {
         File(dir, "pkginstall.sh").setExecutable(true, false)
         writePkgScript(dir)
         writeBionicDbSeed(dir)
+        writeSshHostScript(dir)
+    }
+
+    /**
+     * ssh-host.sh: manage the guest OpenSSH server (start|stop|status).
+     * Why guest, not bionic sshd: bionic NSS synthesizes users and ignores
+     * /etc/passwd files, so host-side sshd can never resolve an account
+     * (proven on-device). The Alpine guest has a real passwd DB, so its
+     * sshd + key auth + SFTP work end to end (proven: live query + file get).
+     * Needs `pkginstall.sh install openssh-server openssh-sftp-server
+     * openssh-keygen` first (checked, with a clear error otherwise).
+     */
+    private fun writeSshHostScript(dir: File) {
+        File(dir, "ssh-host.sh").writeText(
+            """
+            #!/system/bin/sh
+            set -e
+            PREFIX="${dir.absolutePath}"
+            BB="${dir.absolutePath}/busybox"
+            R="${dir.absolutePath}/home/.rootfs"
+            export LD_LIBRARY_PATH="${dir.absolutePath}:${dir.absolutePath}/lib"
+            export PROOT_TMP_DIR="${dir.absolutePath}/tmp"
+            export PROOT_LOADER="${dir.absolutePath}/libexec/proot/loader"
+            export PROOT_LOADER_32="${dir.absolutePath}/libexec/proot/loader32"
+            export PROOT_NO_SECCOMP=1
+            PROOT="${dir.absolutePath}/proot"
+            CONF=/etc/ssh/sshd_config.interlux
+            LOG="${dir.absolutePath}/tmp/sshd.log"
+            PORT=8022
+            cmd="${'$'}{1:-status}"
+            need_guest() {
+              if [ ! -d "${'$'}R/bin" ]; then echo "ssh-host: no guest (run: rootfs.sh install)" >&2; exit 1; fi
+              if [ ! -x "${'$'}R/usr/sbin/sshd" ]; then echo "ssh-host: guest openssh-server missing (run in guest: /root/pkginstall.sh install openssh-server openssh-sftp-server openssh-keygen)" >&2; exit 1; fi
+            }
+            guest() {
+              "${'$'}PROOT" -r "${'$'}R" -0 -b /dev -b /proc -b /sys -w /root /bin/busybox sh -c "${'$'}1"
+            }
+            ensure_keys() {
+              guest '/bin/busybox mkdir -p /etc/ssh /root/.ssh /run/sshd'
+              guest '[ -f /etc/ssh/ssh_host_ed25519_key ] || /usr/bin/ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -N "" >/dev/null 2>&1'
+              guest '[ -f /etc/ssh/ssh_host_rsa_key ] || /usr/bin/ssh-keygen -t rsa -b 3072 -f /etc/ssh/ssh_host_rsa_key -N "" >/dev/null 2>&1'
+              guest '[ -f /root/.ssh/id_ed25519 ] || /usr/bin/ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N "" >/dev/null 2>&1'
+              guest '/bin/busybox cp /root/.ssh/id_ed25519.pub /root/.ssh/authorized_keys; /bin/busybox chmod 600 /root/.ssh/authorized_keys'
+              guest 'printf "Port 8022\nHostKey /etc/ssh/ssh_host_ed25519_key\nHostKey /etc/ssh/ssh_host_rsa_key\nPidFile /run/sshd.pid\nAuthorizedKeysFile /root/.ssh/authorized_keys\nPasswordAuthentication no\nPubkeyAuthentication yes\nStrictModes no\nPrintMotd no\nSubsystem sftp /usr/lib/ssh/sftp-server\n" > /etc/ssh/sshd_config.interlux'
+            }
+            port_open() {
+              "${dir.absolutePath}/bin/bash" -c 'echo > /dev/tcp/127.0.0.1/8022' 2>/dev/null
+            }
+            case "${'$'}cmd" in
+              start)
+                need_guest
+                ensure_keys
+                if port_open; then echo "ssh-host: already listening on 8022"; exit 0; fi
+                "${'$'}BB" setsid "${'$'}PROOT" -r "${'$'}R" -0 -b /dev -b /proc -b /sys -w /root /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config.interlux >>"${'$'}LOG" 2>&1 &
+                sleep 3
+                if port_open; then echo "ssh-host: guest sshd on 127.0.0.1:8022 (key: ~/.ssh/id_ed25519 inside guest; connect: ssh -p 8022 -i <key> root@127.0.0.1)"; else echo "ssh-host: FAILED to start (see ${'$'}LOG)" >&2; exit 1; fi
+                ;;
+              stop)
+                "${'$'}BB" pkill -f sshd_config.interlux 2>/dev/null || true
+                echo "ssh-host: stopped"
+                ;;
+              status)
+                if port_open; then echo "ssh-host: listening on 127.0.0.1:8022"; else echo "ssh-host: down"; fi
+                ;;
+              *) echo "usage: ssh-host.sh start|stop|status" >&2; exit 1;;
+            esac
+            """.trimIndent() + "\n"
+        )
+        File(dir, "ssh-host.sh").setExecutable(true, false)
     }
 
     /** Versions of the APK-bundled power set (from the Termux index audit). */
