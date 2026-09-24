@@ -90,8 +90,18 @@ object Userland {
     // v30 (shebangs): rewrite 78 Termux-baked #! lines to /system interpreters
     //   (npm/yarn/git-helpers/pydoc were dead); +x on rewritten helpers.
     // v31 (openssl cnf): OPENSSL_CONF=/dev/null — node fatals on the unreadable
-    //   Termux-baked default at first crypto use (npm/npx/yarn dead).
-    private const val VERSION = "full-tools-25"
+    //   baked default at first crypto use (npm/npx/yarn dead).
+    // v32 (fetch resilience): curl --retry + resume in pkg.sh (44MB emacs deb
+    //   died at 28% on flaky mobile data).
+    // v33 (pkg.sh symlinks): recreate .so/.bin links at install (extraction
+    //   copies real files only; emacs died on missing libacl.so.1).
+    // v34 (db prune): fresh extracts prune the bionic DB to the seed —
+    //   app updates wipe pkg.sh-installed files while the DB survived.
+    // v35 (pathfix): LD_PRELOAD libpathfix.so rewrites Termux-baked prefixes;
+    //   pkg.sh runs maintainer scripts (emacs pdump generation).
+    // v36 (pkg maintainer fix): run_maintainer's $BB was mis-escaped in the
+    //   Kotlin raw string ({'$'}BB literal) — postinst never ran.
+    private const val VERSION = "full-tools-30"
     private const val ASSET_DIR = "userland"
     private const val DIR_NAME = "userland"
 
@@ -114,6 +124,7 @@ object Userland {
         "proot",
         "libtalloc.so.2",
         "libandroid-shmem.so",
+        "libpathfix.so",
         "libexec/proot/loader",
         "libexec/proot/loader32",
     )
@@ -162,6 +173,7 @@ object Userland {
             val shebangs = fixShebangs(dir)
             val links = createSymlinks(context, dir)
             marker.writeText(VERSION)
+            pruneBionicDb(dir)
             com.keneristudios.interlux.BootTracer.stepPublic(
                 "userland: assets copied, symlinks=$links shebangs=$shebangs"
             )
@@ -240,6 +252,12 @@ object Userland {
             export CURL_CA_BUNDLE="${'$'}SSL_CERT_FILE"
             export REQUESTS_CA_BUNDLE="${'$'}SSL_CERT_FILE"
             export OPENSSL_CONF=/dev/null
+            # pathfix: rewrite Termux-baked absolute prefixes (emacs etc.) at
+            # every path syscall onto this userland. No-op for other paths.
+            export INTERLUX_PREFIX="${dir.absolutePath}"
+            if [ -f "${dir.absolutePath}/libpathfix.so" ]; then
+              export LD_PRELOAD="${dir.absolutePath}/libpathfix.so${'$'}{LD_PRELOAD:+:${'$'}LD_PRELOAD}"
+            fi
             # fetch <url> <out>: curl first (real TLS), busybox wget fallback.
             fetch() {
               if [ -x "${dir.absolutePath}/curl" ]; then
@@ -818,6 +836,36 @@ object Userland {
     }
 
     /**
+     * App updates wipe everything except home/ and var/ — including files
+     * that pkg.sh installed on top. A DB that still lists them would lie
+     * (skip-checks pass, binaries gone). So on a fresh extract, prune the DB
+     * back to the APK-bundled seed and drop orphan manifests; users
+     * reinstall extras with one `pkg.sh install` (files, not versions, move).
+     */
+    private fun pruneBionicDb(dir: File) {
+        try {
+            val db = File(dir, "var/lib/bionic/installed")
+            val manifests = File(dir, "var/lib/bionic/files")
+            val seed = bundledPkgs.keys
+            if (!db.exists()) return
+            val kept = db.readLines().filter { line ->
+                val name = line.substringBefore(" ").trim()
+                name.isEmpty() || name in seed
+            }
+            db.writeText(kept.joinToString("\n").trimEnd() + "\n")
+            manifests.listFiles()?.forEach {
+                if (it.name !in seed) {
+                    try {
+                        it.delete()
+                    } catch (_: Throwable) {
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+        }
+    }
+
+    /**
      * pkg.sh: apt-lite for the bionic side. Termux Depends use package names
      * (no so: mapping needed): resolve closure from a local Packages copy,
      * download .debs, unpack data.tar.* with busybox ar+tar (5 path
@@ -845,8 +893,11 @@ object Userland {
             mkdir -p ${'$'}VDIR ${'$'}MDIR ${'$'}DL
             touch ${'$'}DB
             fetch_url() {
+              # --retry-all-errors + -C - : mobile networks stall and reset
+              # mid-download (proven: 44MB emacs deb died at 28%). Resume
+              # continues partial files instead of restarting them.
               if [ -x "${'$'}CURL" ]; then
-                LD_LIBRARY_PATH="${dir.absolutePath}" "${'$'}CURL" --cacert "${'$'}CA" -L -o "${'$'}2" "${'$'}1"
+                LD_LIBRARY_PATH="${dir.absolutePath}" "${'$'}CURL" --cacert "${'$'}CA" --retry 5 --retry-all-errors -C - -L -o "${'$'}2" "${'$'}1"
               else
                 "${'$'}BB" wget -O "${'$'}2" "${'$'}1"
               fi
@@ -939,9 +990,53 @@ object Userland {
               esac
               echo "PKG: installing ${'$'}1"
               ${'$'}BB ar p "${'$'}2" "${'$'}member" | ${'$'}BB ${'$'}dec | ${'$'}BB tar -x --strip-components 6 -C "${'$'}PREFIX"
+              # Recreate .so/.bin symlinks (skipped at extract: only real files
+              # are copied, e.g. libacl.so.1.2.3 without its libacl.so.1 link
+              # that binaries actually NEEDED). Map archive paths the same way.
+              ${'$'}BB ar p "${'$'}2" "${'$'}member" | ${'$'}BB ${'$'}dec | ${'$'}BB tar -tv 2>/dev/null | ${'$'}BB grep -- ' -> ' | while IFS= read -r line; do
+                tgt="${'$'}{line##* -> }"
+                pre="${'$'}{line%% -> *}"
+                link="${'$'}{pre##* }"
+                case "${'$'}link" in ./*) link="${'$'}{link#./}";; esac
+                case "${'$'}link" in data/data/com.termux/files/usr/*) link="${'$'}{link#data/data/com.termux/files/usr/}";; *) continue;; esac
+                if [ -n "${'$'}link" ] && [ -n "${'$'}tgt" ]; then
+                  ${'$'}BB mkdir -p "${'$'}PREFIX/$(dirname "${'$'}link")"
+                  ${'$'}BB ln -sf "${'$'}tgt" "${'$'}PREFIX/${'$'}link"
+                fi
+              done
               ${'$'}BB ar p "${'$'}2" "${'$'}member" | ${'$'}BB ${'$'}dec | ${'$'}BB tar -t 2>/dev/null | ${'$'}BB sed 's,^./data/data/com.termux/files/usr/,,' | ${'$'}BB grep -v -E '^(\./)?data/' | ${'$'}BB sort -u > "${'$'}MDIR/${'$'}1"
               db_record "${'$'}1" "$(field "${'$'}s" Version)"
               ${'$'}BB chmod +x "${'$'}PREFIX/bin/"* 2>/dev/null || true
+              run_maintainer "${'$'}1" "${'$'}2"
+            }
+            run_maintainer() {
+              # $1=pkg $2=debpath: run postinst if present (emacs needs it to
+              # generate the .pdmp dump). Rewrite baked Termux paths so the
+              # script operates on ${'$'}PREFIX; tolerate missing helpers.
+              cm="${'$'}( ${'$'}BB ar t "${'$'}2" 2>/dev/null | ${'$'}BB grep '^control.tar' | ${'$'}BB head -n1 )"
+              [ -n "${'$'}cm" ] || return 0
+              case "${'$'}cm" in
+                *.xz) cdec="unxz -c";;
+                *.gz) cdec="gunzip -c";;
+                *.bz2) cdec="bunzip2 -c";;
+                *) cdec="cat";;
+              esac
+              ct="${'$'}( "${'$'}BB" mktemp "${'$'}PREFIX/tmp/ctrl.XXXXXX" )"
+              ${'$'}BB ar p "${'$'}2" "${'$'}cm" | ${'$'}BB ${'$'}cdec > "${'$'}ct" || { ${'$'}BB rm -f "${'$'}ct"; return 0; }
+              pi="${'$'}( "${'$'}BB" mktemp "${'$'}PREFIX/tmp/postinst.XXXXXX" )"
+              if ${'$'}BB tar -xOf "${'$'}ct" ./postinst > "${'$'}pi" 2>/dev/null || ${'$'}BB tar -xOf "${'$'}ct" postinst > "${'$'}pi" 2>/dev/null; then
+                if [ -s "${'$'}pi" ]; then
+                  ${'$'}BB sed -i "s|/data/data/com.termux/files/usr|${'$'}PREFIX|g" "${'$'}pi" 2>/dev/null || true
+                  echo "PKG: maintainer: ${'$'}1"
+                  INTERLUX_PREFIX="${'$'}PREFIX" LD_PRELOAD="${'$'}PREFIX/libpathfix.so" \
+                    "${'$'}BB" sh "${'$'}pi" configure >/dev/null 2>&1 || \
+                    INTERLUX_PREFIX="${'$'}PREFIX" LD_PRELOAD="${'$'}PREFIX/libpathfix.so" \
+                    "${'$'}PREFIX/bin/bash" "${'$'}pi" configure || \
+                    echo "PKG: maintainer failed (non-fatal): ${'$'}1" >&2
+                fi
+              fi
+              ${'$'}BB rm -f "${'$'}ct" "${'$'}pi"
+              return 0
             }
             cmd_install() {
               done_list=" "

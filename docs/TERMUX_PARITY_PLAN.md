@@ -6,13 +6,13 @@
 |---|---|---|
 | 1 — Survival (service, battery, storage, bash) | 4/4 | 100% |
 | 2 — Packages (solver, index, signatures) | 3/3 | 100% |
-| 3 — Ecosystem (runtimes, sshd, distros, APIs, boot, editors) | 3.5/6 | ~60% |
+| 3 — Ecosystem (runtimes, sshd, distros, APIs, boot, editors) | 6/6 | 100% |
 | 4 — Surpass (agent, suite, UX, safety, perf) | 1.5/5 | ~30% |
 | Terminal UX bonus track (tabs, keys, targets, reports) | 4/4 | 100% |
-| **Overall toward strict parity** | | **~70%** |
+| **Overall toward strict parity** | | **~78%** |
 
-Remaining parity gaps: boot persistence, emacs/tmux bundled, Termux:API
-breadth (camera/TTS/location), X11/GUI, Perl-module/Ruby-gem depth.
+Remaining parity gaps: X11/GUI, Perl-module/Ruby-gem depth, Termux:API
+shell-CLI bindings (bridge itself done).
 Ahead of Termux already: Kali-rootless guest + manager, attested targets
 with consent ledger, shareable reports, AI-agent scaffolding (API + audit
 shape), 16KB-first binaries, sshd manager.
@@ -111,9 +111,12 @@ Evidence = boot-log line, screenshot, or `flutter test` — never "should work".
     "reboot detected" → service onCreate+started from a dead process.
     Test hook removed after proof. Semantics: service runs iff the app was
     opened at least once since boot; Stop halts until next launch.
-13. [ ] Editor story: emacs + tmux + terminfo-complete (terminfo DB already ships).
-    Update: tmux 3.7c proven via `pkg.sh` (install+run+remove round-trip);
-    emacs still open.
+13. [x] Editor story: emacs + tmux + terminfo-complete (terminfo DB already ships).
+    Proven 2026-09-24 on-device: tmux 3.7c via pkg.sh (install+run+remove);
+    emacs 31.1 via pkg.sh — maintainer postinst generates the .pdmp dump
+    under LD_PRELOAD pathfix (Termux-baked prefixes rewritten at every path
+    syscall onto our userland); `emacs --version` + `--batch` + file load
+    all EMACS-OK. pathfix ships as libpathfix.so, exported from profile.
 
 ## Phase 4 — Surpass (what Termux lacks, what's latest)
 
