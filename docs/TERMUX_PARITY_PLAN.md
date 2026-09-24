@@ -42,9 +42,15 @@ Evidence = boot-log line, screenshot, or `flutter test` — never "should work".
     (binary gone, shared libs + /etc kept via rmdir-only rule — an rm -rf
     version wiped guest /etc first, caught and fixed) → reinstall → upgrade
     no-op → versioned DB. so: resolution, size+.PKGINFO checks, manifests.
-6. [ ] Bionic-native index (Termux .deb metadata → install/upgrade node,
-    python, git…). Done-when: one command upgrades the power set in place.
-7. [ ] GPG/index signature verification (today: size+identity only).
+6. [x] Bionic-native index (Termux .deb metadata → install/upgrade node,
+    python, git…). Proven 2026-09-23 on-device: `pkg.sh` resolves closures,
+    skips current, downloads (URL-encoded), extracts via ar+tar; tmux 3.7c
+    installed+ran, removed cleanly (shared libs kept), live `upgrade`
+    moved proot .93→.94 + libc++ 29→30. Fixes found by testing: ^Package:
+    stanza field, full-key field() strip, strip-components 6, version bump
+    required for script refreshes. Note: upgrade pulled real
+    libandroid-selinux into lib/ (stub at root still wins LD order; tidy later).
+7. [ ] GPG/index signature verification (today: size + identity only).
     Done-when: tampered .apk is refused with a clear error.
 
 ## Phase 3 — Ecosystem parity (daily-driver completeness)

@@ -73,7 +73,16 @@ object Userland {
     // v22 (pkginstall v2.5): remove uses rmdir (empty-only) — rm -rf on
     //   manifest dir entries wiped the guest /etc on-device. Directories in
     //   manifests are now harmless.
-    private const val VERSION = "full-tools-16"
+    // v23 (pkg.sh bionic): apt-lite for the power set — resolve/install/
+    //   upgrade/remove over Termux .debs with DB seed of bundled versions.
+    // v24 (pkg.sh fixes): correct Debian stanza field (^Package:), empty-line
+    //   filtering. Lesson re-learned: code-only script changes still need a
+    //   version bump or existing installs never re-extract.
+    // v25 (pkg.sh fixes II): field()/field_stdin() must strip full key names
+    //   (cut -c3- only fits 1-letter keys); URL-encode +/: in .deb URLs.
+    // v26 (pkg.sh fixes III): busybox tar needs space-form --strip-components
+    //   and count 6 (leading ./ counts); =5 form silently extracts nothing.
+    private const val VERSION = "full-tools-20"
     private const val ASSET_DIR = "userland"
     private const val DIR_NAME = "userland"
 
@@ -569,6 +578,251 @@ object Userland {
             """.trimIndent() + "\n"
         )
         File(dir, "pkginstall.sh").setExecutable(true, false)
+        writePkgScript(dir)
+        writeBionicDbSeed(dir)
+    }
+
+    /** Versions of the APK-bundled power set (from the Termux index audit). */
+    private val bundledPkgs = mapOf(
+        "busybox" to "1.38.0-1",
+        "curl" to "8.22.0",
+        "libcurl" to "8.22.0",
+        "libnghttp2" to "1.70.0",
+        "libnghttp3" to "1.18.0",
+        "libngtcp2" to "1.25.0",
+        "libssh2" to "1.11.1-2",
+        "openssl" to "1:3.6.3",
+        "zlib" to "1.3.2",
+        "proot" to "5.1.107.93",
+        "libtalloc" to "2.4.3",
+        "libandroid-shmem" to "0.7",
+        "libandroid-selinux" to "stub-1",
+        "libandroid-support" to "29-1",
+        "nodejs" to "26.4.0-1",
+        "npm" to "11.20.0",
+        "yarn" to "1.22.22",
+        "python" to "3.14.6-1",
+        "git" to "2.55.0",
+        "nmap" to "7.991",
+        "openssh" to "10.5p1",
+        "openssh-sftp-server" to "10.5p1",
+        "vim" to "9.2.1100",
+        "bash" to "5.3.20",
+        "libc++" to "29",
+        "libffi" to "3.8.0",
+        "libicu" to "78.3",
+        "libsqlite" to "3.53.4",
+        "gdbm" to "1.26-1",
+        "libandroid-posix-semaphore" to "0.1-4",
+        "libbz2" to "1.0.8-8",
+        "libcrypt" to "0.2-6",
+        "libexpat" to "2.8.5",
+        "liblzma" to "5.8.4",
+        "ncurses" to "6.6.20260307+really6.5.20250830",
+        "ncurses-ui-libs" to "6.6.20260307+really6.5.20250830",
+        "readline" to "8.3.6",
+        "zstd" to "1.5.7-1",
+        "less" to "710",
+        "libiconv" to "1.19",
+        "pcre2" to "10.47",
+        "libpcap" to "1.10.5-1",
+        "lua54" to "5.4.8-10",
+        "krb5" to "1.22.2",
+        "ldns" to "1.8.4-1",
+        "libandroid-glob" to "0.6-3",
+        "libdb" to "18.1.40-6",
+        "libedit" to "20260512-3.1-0",
+        "libresolv-wrapper" to "1.1.7-6",
+        "termux-auth" to "1.5.0-1",
+        "libsodium" to "1.0.22-1",
+        "c-ares" to "1.34.8",
+    )
+
+    /** Pre-seed the bionic DB so pkg.sh knows the APK-bundled set. */
+    private fun writeBionicDbSeed(dir: File) {
+        val db = File(dir, "var/lib/bionic/installed")
+        if (db.exists()) return // upgrades survive app updates
+        db.parentFile.mkdirs()
+        db.writeText(bundledPkgs.entries.joinToString("\n") { "${it.key} ${it.value}" } + "\n")
+    }
+
+    /**
+     * pkg.sh: apt-lite for the bionic side. Termux Depends use package names
+     * (no so: mapping needed): resolve closure from a local Packages copy,
+     * download .debs, unpack data.tar.* with busybox ar+tar (5 path
+     * components stripped), track versions + manifests. Refuses to remove
+     * base-system packages that have no manifest.
+     * Run in the shell: pkg.sh update|install|remove|upgrade|list <pkgs...>
+     */
+    private fun writePkgScript(dir: File) {
+        File(dir, "pkg.sh").writeText(
+            """
+            #!/system/bin/sh
+            set -e
+            PREFIX="${dir.absolutePath}"
+            export LD_LIBRARY_PATH="${dir.absolutePath}/lib:${dir.absolutePath}"
+            BB="${dir.absolutePath}/busybox"
+            CURL="${dir.absolutePath}/curl"
+            CA="${dir.absolutePath}/etc/ssl/certs/ca-certificates.crt"
+            ARCH=aarch64
+            REPO=https://packages.termux.dev/apt/termux-main
+            VDIR=${'$'}PREFIX/var/lib/bionic
+            IDX=${'$'}VDIR/Packages
+            DB=${'$'}VDIR/installed
+            MDIR=${'$'}VDIR/files
+            DL=${'$'}PREFIX/tmp/debs
+            mkdir -p ${'$'}VDIR ${'$'}MDIR ${'$'}DL
+            touch ${'$'}DB
+            fetch_url() {
+              if [ -x "${'$'}CURL" ]; then
+                LD_LIBRARY_PATH="${dir.absolutePath}" "${'$'}CURL" --cacert "${'$'}CA" -L -o "${'$'}2" "${'$'}1"
+              else
+                "${'$'}BB" wget -O "${'$'}2" "${'$'}1"
+              fi
+            }
+            cmd="${'$'}{1:-list}"; shift || true
+            if [ "${'$'}cmd" = "update" ]; then
+              fetch_url "${'$'}REPO/dists/stable/main/binary-${'$'}ARCH/Packages.gz" "${'$'}IDX.gz"
+              "${'$'}BB" gunzip -f "${'$'}IDX.gz"
+              echo "PKG: index refreshed"
+              exit 0
+            fi
+            [ -f "${'$'}IDX" ] || { echo "PKG: no index, run: pkg.sh update" >&2; exit 1; }
+            stanza() {
+              ${'$'}BB grep -A20 "^Package: ${'$'}1\$" "${'$'}IDX" | ${'$'}BB sed -n '1,/^$/p'
+            }
+            field() {
+              echo "${'$'}1" | ${'$'}BB grep "^${'$'}2:" | ${'$'}BB head -n1 | ${'$'}BB sed "s/^${'$'}2: //"
+            }
+            debfile() {
+              field "${'$'}1" Filename
+            }
+            deppkgs() {
+              # Depends: "a (>= 1), b | c" -> "a" "b" (first alternate wins)
+              echo "${'$'}1" | ${'$'}BB grep '^Depends:' | ${'$'}BB cut -c9- | ${'$'}BB tr ',' '\n' | ${'$'}BB cut -d'|' -f1 | ${'$'}BB sed 's/([^)]*)//g; s/^ *//; s/ *$//' | ${'$'}BB grep -v '^$' || true
+            }
+            db_version() {
+              ${'$'}BB grep "^${'$'}1 " ${'$'}DB 2>/dev/null | ${'$'}BB head -n1 | ${'$'}BB cut -d' ' -f2 || true
+            }
+            db_record() {
+              ${'$'}BB grep -v "^${'$'}1 " ${'$'}DB 2>/dev/null > ${'$'}DB.new || true
+              echo "${'$'}1 ${'$'}2" >> ${'$'}DB.new
+              ${'$'}BB mv ${'$'}DB.new ${'$'}DB
+            }
+            db_forget() {
+              ${'$'}BB grep -v "^${'$'}1 " ${'$'}DB 2>/dev/null > ${'$'}DB.new || true
+              ${'$'}BB mv ${'$'}DB.new ${'$'}DB
+              ${'$'}BB rm -f "${'$'}MDIR/${'$'}1"
+            }
+            owned_elsewhere() {
+              for m in ${'$'}MDIR/*; do
+                [ -f "${'$'}m" ] || continue
+                [ "${'$'}m" = "${'$'}MDIR/${'$'}2" ] && continue
+                if ${'$'}BB grep -qxF "${'$'}1" "${'$'}m" 2>/dev/null; then return 0; fi
+              done
+              return 1
+            }
+            do_resolve() {
+              case "${'$'}done_list" in *" ${'$'}1 "*) return 0;; esac
+              done_list="${'$'}done_list${'$'}1 "
+              s=$(stanza "${'$'}1")
+              if [ -z "${'$'}s" ]; then echo "PKG: unknown package ${'$'}1" >&2; return 1; fi
+              for d in $(deppkgs "${'$'}s"); do
+                do_resolve "${'$'}d" || return 1
+              done
+              echo "${'$'}1"
+            }
+            do_fetch_one() {
+              s=$(stanza "${'$'}1")
+              f=$(debfile "${'$'}s")
+              b=$(${'$'}BB basename "${'$'}f")
+              if [ ! -f "${'$'}DL/${'$'}b" ]; then
+                echo "PKG: downloading ${'$'}b" >&2
+                # .deb filenames contain + and : (version epochs) which curl
+                # rejects raw; busybox wget takes them as-is.
+                urlpath=$(echo "${'$'}f" | ${'$'}BB sed 's/+/%2B/g; s/:/%3A/g')
+                fetch_url "${'$'}REPO/${'$'}urlpath" "${'$'}DL/${'$'}b" || return 1
+              fi
+              echo "${'$'}DL/${'$'}b"
+            }
+            do_install_file() {
+              # $1=pkg $2=debpath: unpack data.tar.* (5 components stripped)
+              s=$(stanza "${'$'}1")
+              member=$(${'$'}BB ar t "${'$'}2" 2>/dev/null | ${'$'}BB grep '^data.tar' | ${'$'}BB head -n1)
+              if [ -z "${'$'}member" ]; then echo "PKG: no data archive in ${'$'}2" >&2; return 1; fi
+              case "${'$'}member" in
+                *.xz) dec="unxz -c";;
+                *.gz) dec="gunzip -c";;
+                *.bz2) dec="bunzip2 -c";;
+                *) dec="cat";;
+              esac
+              echo "PKG: installing ${'$'}1"
+              ${'$'}BB ar p "${'$'}2" "${'$'}member" | ${'$'}BB ${'$'}dec | ${'$'}BB tar -x --strip-components 6 -C "${'$'}PREFIX"
+              ${'$'}BB ar p "${'$'}2" "${'$'}member" | ${'$'}BB ${'$'}dec | ${'$'}BB tar -t 2>/dev/null | ${'$'}BB sed 's,^./data/data/com.termux/files/usr/,,' | ${'$'}BB grep -v -E '^(\./)?data/' | ${'$'}BB sort -u > "${'$'}MDIR/${'$'}1"
+              db_record "${'$'}1" "$(field "${'$'}s" Version)"
+              ${'$'}BB chmod +x "${'$'}PREFIX/bin/"* 2>/dev/null || true
+            }
+            cmd_install() {
+              done_list=" "
+              closure=""
+              for p in ${'$'}@; do
+                closure="${'$'}closure $(do_resolve "${'$'}p" || return 1)"
+              done
+              for p in ${'$'}closure; do
+                if [ "$(db_version "${'$'}p")" = "$(stanza "${'$'}p" | field_stdin Version)" ] && [ -n "$(db_version "${'$'}p")" ]; then
+                  echo "PKG: already installed: ${'$'}p"
+                  continue
+                fi
+                f=$(do_fetch_one "${'$'}p") || return 1
+                do_install_file "${'$'}p" "${'$'}f" || return 1
+              done
+              echo "PKG: installed: ${'$'}@"
+            }
+            field_stdin() {
+              ${'$'}BB grep "^${'$'}1:" | ${'$'}BB head -n1 | ${'$'}BB sed "s/^${'$'}1: //"
+            }
+            cmd_remove() {
+              for p in ${'$'}@; do
+                if [ ! -f "${'$'}MDIR/${'$'}p" ]; then echo "PKG: not installed (or base system, refusing): ${'$'}p"; continue; fi
+                ${'$'}BB sort -r "${'$'}MDIR/${'$'}p" | while IFS= read -r f; do
+                  [ -n "${'$'}f" ] || continue
+                  if owned_elsewhere "${'$'}f" "${'$'}p"; then continue; fi
+                  if [ -d "${'$'}PREFIX/${'$'}f" ] && [ ! -L "${'$'}PREFIX/${'$'}f" ]; then
+                    ${'$'}BB rmdir "${'$'}PREFIX/${'$'}f" 2>/dev/null || true
+                  else
+                    ${'$'}BB rm -f "${'$'}PREFIX/${'$'}f" 2>/dev/null || true
+                  fi
+                done
+                db_forget "${'$'}p"
+                echo "PKG: removed: ${'$'}p"
+              done
+            }
+            cmd_upgrade() {
+              fetch_url "${'$'}REPO/dists/stable/main/binary-${'$'}ARCH/Packages.gz" "${'$'}IDX.gz"
+              "${'$'}BB" gunzip -f "${'$'}IDX.gz"
+              changed=0
+              for rec in $(${ '$'}BB cut -d' ' -f1 ${'$'}DB 2>/dev/null || true); do
+                [ -n "${'$'}rec" ] || continue
+                s=$(stanza "${'$'}rec")
+                [ -n "${'$'}s" ] || continue
+                if [ "$(field "${'$'}s" Version)" != "$(db_version "${'$'}rec")" ]; then
+                  echo "PKG: upgrading ${'$'}rec"
+                  cmd_install "${'$'}rec" || return 1
+                  changed=1
+                fi
+              done
+              [ "${'$'}changed" = "0" ] && echo "PKG: everything up to date"
+            }
+            case "${'$'}cmd" in
+              install) cmd_install ${'$'}@;;
+              remove) cmd_remove ${'$'}@;;
+              upgrade) cmd_upgrade;;
+              list) ${'$'}BB cat ${'$'}DB 2>/dev/null || true;;
+              *) echo "usage: pkg.sh update|install|remove|upgrade|list <pkgs...>" >&2; exit 1;;
+            esac
+            """.trimIndent() + "\n"
+        )
+        File(dir, "pkg.sh").setExecutable(true, false)
     }
 
     /** Best-effort `curl --version` first line; never throws ("unknown" if N/A). */
@@ -618,12 +872,12 @@ object Userland {
     }
 
     /**
-     * Delete a stale userland tree but keep home/ (user data + any downloaded
-     * Alpine guest). Everything else is regenerated from APK assets.
+     * Delete a stale userland tree but keep home/ (user data + Alpine guest)
+     * and var/ (package DBs + manifests). Everything else is regenerated.
      */
     private fun wipeExceptHome(dir: File) {
         dir.listFiles()?.forEach { child ->
-            if (child.name == "home") return@forEach
+            if (child.name == "home" || child.name == "var") return@forEach
             try {
                 if (child.isDirectory) child.deleteRecursively() else child.delete()
             } catch (_: Throwable) {
