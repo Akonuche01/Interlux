@@ -45,6 +45,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
   List<TerminalMatch> _matches = const [];
   int _matchIndex = 0;
 
+  /// Second visible pane (split view). Null means single pane.
+  /// Always a different session from [_activeIndex].
+  int? _splitIndex;
+
+  TerminalSession? get _split =>
+      _splitIndex == null ? null : _sessions[_splitIndex!];
+
   TerminalSession get _active => _sessions[_activeIndex];
 
   @override
@@ -78,6 +85,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
   void _closeSession(int index) {
     if (_searchOpen) _closeSearch();
+    if (_splitIndex != null) {
+      if (index == _splitIndex) {
+        _splitIndex = null;
+      } else if (index < _splitIndex!) {
+        _splitIndex = _splitIndex! - 1;
+      }
+    }
     if (_sessions.length == 1) {
       // Never leave the user with no terminal: reset the last tab.
       final fresh = TerminalSession();
@@ -99,8 +113,46 @@ class _TerminalScreenState extends State<TerminalScreen> {
       if (_activeIndex >= _sessions.length) {
         _activeIndex = _sessions.length - 1;
       }
+      // Never show the same session in both panes.
+      if (_splitIndex != null &&
+          (_splitIndex! >= _sessions.length ||
+              _splitIndex == _activeIndex)) {
+        _splitIndex = null;
+      }
     });
     removed.dispose();
+  }
+
+  /// Toggle the second pane. Opening shows a picker (other tabs + new tab);
+  /// tapping the split pane itself makes it active.
+  void _toggleSplit() {
+    if (_splitIndex != null) {
+      setState(() => _splitIndex = null);
+      return;
+    }
+    showDialog(
+      context: context,
+      builder: (context) => _SplitPicker(
+        sessions: _sessions,
+        activeIndex: _activeIndex,
+        onPick: (i) => setState(() => _splitIndex = i),
+        onNew: () {
+          _addSession();
+          setState(() => _splitIndex = _sessions.length - 1);
+        },
+      ),
+    );
+  }
+
+  void _activatePane(int index) {
+    if (_searchOpen) _closeSearch();
+    setState(() {
+      if (index == _splitIndex) {
+        // Promote the split pane to main instead of doubling it.
+        _splitIndex = null;
+      }
+      _activeIndex = index;
+    });
   }
 
   void _onSessionChanged() {
@@ -278,15 +330,14 @@ class _TerminalScreenState extends State<TerminalScreen> {
             _SessionTabBar(
               sessions: _sessions,
               activeIndex: _activeIndex,
-              onSelect: (i) {
-                if (_searchOpen) _closeSearch();
-                setState(() => _activeIndex = i);
-              },
+              onSelect: _activatePane,
               onClose: _closeSession,
               onAdd: _addSession,
               onTargets: _openTargets,
               onShare: _shareActiveReport,
               onSearch: _openSearch,
+              onSplit: _toggleSplit,
+              splitActive: _splitIndex != null,
             ),
             if (_searchOpen) _SearchBar(
               field: _searchField,
@@ -299,10 +350,50 @@ class _TerminalScreenState extends State<TerminalScreen> {
               onClose: _closeSearch,
             ),
             Expanded(
-              child: TerminalView(
-                active.terminal,
-                controller: active.controller,
-                theme: const TerminalTheme(
+              child: _split == null
+                  ? _buildPane(active, isActive: true)
+                  : Row(
+                      children: [
+                        Expanded(child: _buildPane(active, isActive: true)),
+                        GestureDetector(
+                          onTap: _toggleSplit,
+                          child: Container(
+                            width: 6,
+                            color: const Color(0xFF2A2A2A),
+                            child: const Center(
+                              child: Icon(
+                                Icons.drag_handle,
+                                size: 12,
+                                color: Color(0xFF666666),
+                              ),
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                            child: _buildPane(_split!, isActive: false)),
+                      ],
+                    ),
+            ),
+            _ExtraKeysBar(
+              ctrlHeld: _ctrlHeld,
+              altHeld: _altHeld,
+              onToggleCtrl: () => setState(() => _ctrlHeld = !_ctrlHeld),
+              onToggleAlt: () => setState(() => _altHeld = !_altHeld),
+              onKey: _sendExtraKey,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// One terminal pane. Only the active pane holds autofocus (two autofocus
+  /// widgets fight over the keyboard); tapping the idle pane promotes it.
+  Widget _buildPane(TerminalSession session, {required bool isActive}) {
+    final pane = TerminalView(
+      session.terminal,
+      controller: session.controller,
+      theme: const TerminalTheme(
             cursor: Color(0xFFE6E6E6),
             selection: Color(0x40E6E6E6),
             foreground: Color(0xFFE6E6E6),
@@ -328,7 +419,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
             searchHitForeground: Color(0xFF000000),
           ),
           textStyle: const TerminalStyle(fontSize: 14),
-          autofocus: true,
+          autofocus: isActive,
           hardwareKeyboardOnly: false,
           simulateScroll: true,
           // visiblePassword disables IME composing/autocorrect: keystrokes
@@ -336,20 +427,14 @@ class _TerminalScreenState extends State<TerminalScreen> {
           // sitting left of an underlined composing preview. Autocorrect
           // would corrupt shell input anyway.
           keyboardType: TextInputType.visiblePassword,
-        ),
-      ),
-      _ExtraKeysBar(
-        ctrlHeld: _ctrlHeld,
-        altHeld: _altHeld,
-        onToggleCtrl: () => setState(() => _ctrlHeld = !_ctrlHeld),
-        onToggleAlt: () => setState(() => _altHeld = !_altHeld),
-        onKey: _sendExtraKey,
-      ),
-    ],
-  ),
-  ),
-);
-}
+    );
+    if (isActive) return pane;
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: () => _activatePane(_sessions.indexOf(session)),
+      child: pane,
+    );
+  }
 }
 
 /// Tab strip above the terminal: one chip per session plus a + button.
@@ -363,6 +448,8 @@ class _SessionTabBar extends StatelessWidget {
   final VoidCallback onTargets;
   final VoidCallback onShare;
   final VoidCallback onSearch;
+  final VoidCallback onSplit;
+  final bool splitActive;
 
   const _SessionTabBar({
     required this.sessions,
@@ -373,6 +460,8 @@ class _SessionTabBar extends StatelessWidget {
     required this.onTargets,
     required this.onShare,
     required this.onSearch,
+    required this.onSplit,
+    required this.splitActive,
   });
 
   @override
@@ -488,7 +577,83 @@ class _SessionTabBar extends StatelessWidget {
               ),
             ),
           ),
+          GestureDetector(
+            onTap: onSplit,
+            child: Container(
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              margin: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: splitActive
+                    ? const Color(0xFF3A2E5C)
+                    : const Color(0xFF232323),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Icon(
+                Icons.vertical_split,
+                size: 16,
+                color: Color(0xFFE6E6E6),
+              ),
+            ),
+          ),
         ],
+      ),
+    );
+  }
+}
+
+/// Picker for the split-view second pane: other tabs or a fresh tab.
+class _SplitPicker extends StatelessWidget {
+  final List<TerminalSession> sessions;
+  final int activeIndex;
+  final void Function(int index) onPick;
+  final VoidCallback onNew;
+
+  const _SplitPicker({
+    required this.sessions,
+    required this.activeIndex,
+    required this.onPick,
+    required this.onNew,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1A1A1A),
+      title: const Text(
+        'Split with',
+        style: TextStyle(color: Color(0xFFE6E6E6), fontSize: 16),
+      ),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            for (var i = 0; i < sessions.length; i++)
+              if (i != activeIndex)
+                ListTile(
+                  title: Text(
+                    sessions[i].name,
+                    style: const TextStyle(color: Color(0xFFE6E6E6)),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    onPick(i);
+                  },
+                ),
+            ListTile(
+              leading: const Icon(Icons.add, color: Color(0xFFE6E6E6)),
+              title: const Text(
+                'New tab',
+                style: TextStyle(color: Color(0xFFE6E6E6)),
+              ),
+              onTap: () {
+                Navigator.pop(context);
+                onNew();
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
