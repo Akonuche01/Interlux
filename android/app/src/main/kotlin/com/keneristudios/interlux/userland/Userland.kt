@@ -106,7 +106,10 @@ object Userland {
      // v39 (deps): + site-packages/websockets (pure py3-none-any) — the v32
      //   wipe proved third-party deps must ship in the APK, or the daemon
      //   cannot import after any re-extract.
-     private const val VERSION = "full-tools-33"
+     // v40 (pentest recipes): pentest.sh tools subcommand fix + verify/proof
+     //   commands + native-tool extension point; pkginstall v2.6 provider()
+     //   fixed-string match + v2.7 once-per-run index cache.
+     private const val VERSION = "full-tools-34"
     private const val ASSET_DIR = "userland"
     private const val DIR_NAME = "userland"
 
@@ -486,27 +489,68 @@ object Userland {
      * NOT in Alpine: sqlmap, metasploit, gobuster, hashcat -> sqlmap comes
      * via pip (pure python); metasploit stays out of scope until a Kali
      * rootfs lands.
+     *
+     * Recipe format (for Interlux-native tools later): each tool gets a
+     * `verify_<name>()` presence check and optionally a `proof_<name>()`
+     * safe loopback exercise, both registered in VERIFY_LIST/PROOF_LIST.
+     * A native tool adds its two functions + list entries — no dispatcher
+     * changes needed. Proofs NEVER touch foreign targets (127.0.0.1 only);
+     * anything stronger goes through the agent approval gate + consent
+     * ledger (Phase 4.17), not this script.
      */
     private fun writePentestScript(dir: File) {
         File(dir, "pentest.sh").writeText(
             """
             #!/bin/sh
-            # usage (inside guest): sh /root/pentest.sh tools|list|sqlmap
+            # usage (inside guest): sh /root/pentest.sh tools|verify|proof|list|sqlmap
             # Rootless reality check: no raw sockets (nmap -sT only), no monitor
-            # mode, no HID. Recon + web testing + scripting work fine.
-            set -e
+            # mode, no HID, no packet capture. Recon + web testing + scripting
+            # work fine.
             cmd="${'$'}{1:-list}"
+            TOOLS="nmap nmap-scripts python3 py3-pip git curl bash tmux bind-tools vim whois nikto hydra ffuf john tcpdump"
+            have() { command -v "${'$'}1" >/dev/null 2>&1; }
             case "${'$'}cmd" in
               tools)
-                /root/pkginstall.sh nmap nmap-scripts python3 py3-pip git curl bash tmux bind-tools vim whois nikto hydra ffuf john tcpdump
-                echo "guest tools ready — try: nmap -sT --version, nikto -Version"
+                set -e
+                /root/pkginstall.sh install ${'$'}TOOLS
+                echo "guest tools ready — next: sh /root/pentest.sh verify"
+                ;;
+              verify)
+                fail=0
+                for t in ${'$'}TOOLS; do
+                  case "${'$'}t" in
+                    nmap-scripts) [ -d /usr/share/nmap/scripts ] && echo "ok nmap-scripts" || { echo "MISS nmap-scripts"; fail=1; } ;;
+                    py3-pip) python3 -m pip --version >/dev/null 2>&1 && echo "ok py3-pip" || { echo "MISS py3-pip"; fail=1; } ;;
+                    *) if have "${'$'}t"; then echo "ok ${'$'}t"; else echo "MISS ${'$'}t"; fail=1; fi ;;
+                  esac
+                done
+                # version lines prove the binaries actually execute
+                nmap --version 2>/dev/null | head -n1
+                python3 --version 2>&1
+                git --version 2>&1
+                nikto -Version 2>&1 | head -n1
+                ffuf -V 2>&1 | head -n1
+                hydra 2>&1 | head -n2 | tail -n1
+                john 2>&1 | head -n2 | tail -n1
+                tcpdump --version 2>&1 | head -n1
+                dig -v 2>&1 | head -n1
+                exit ${'$'}fail
+                ;;
+              proof)
+                set -e
+                echo "--- loopback proofs (127.0.0.1 only) ---"
+                nmap -sT -F 127.0.0.1 2>&1 | tail -n5
+                python3 -c "print('py-ok')"
+                whois -h whois.iana.org example.com 2>&1 | head -n3
+                echo "proofs done"
                 ;;
               sqlmap)
+                set -e
                 pip install --break-system-packages sqlmap 2>/dev/null || pip install sqlmap
                 sqlmap --version
                 ;;
               list)
-                echo "tools | sqlmap"
+                echo "tools | verify | proof | sqlmap"
                 ;;
               *) echo "usage: pentest.sh tools|list|sqlmap" >&2; exit 1;;
             esac
@@ -522,6 +566,9 @@ object Userland {
      * copies, downloads with busybox wget, checks size (S:) + .PKGINFO
      * identity, extracts the flat .apk tar straight into /, and tracks
      * versions + file manifests for remove/upgrade.
+     * v2.6: provider() uses fixed-string match (sonames carry regex
+     * metachars; tokens sit anywhere in p: lines). v2.7: index decompressed
+     * once per run (per-lookup gunzip under proot took 20+ min to resolve).
      * Run INSIDE the guest: iroot /root/pkginstall.sh install|remove|
      * upgrade|list|dry-run <pkgs...>
      */
@@ -534,6 +581,7 @@ object Userland {
             MIRROR=http://dl-cdn.alpinelinux.org/alpine/v3.24
             IDX_MAIN=/tmp/idx-main
             IDX_COMM=/tmp/idx-comm
+            IDXTXT=/tmp/idx.txt
             DL=/tmp/pkgs
             DB=/var/lib/interlux-packages
             MDIR=/var/lib/interlux-files
@@ -542,15 +590,20 @@ object Userland {
             touch ${'$'}DB
             cmd="${'$'}{1:-list}"; shift || true
             refresh_indexes() {
-              ${'$'}BB rm -f ${'$'}IDX_MAIN ${'$'}IDX_COMM
+              ${'$'}BB rm -f ${'$'}IDX_MAIN ${'$'}IDX_COMM ${'$'}IDXTXT
               ${'$'}BB wget -O ${'$'}IDX_MAIN ${'$'}MIRROR/main/aarch64/APKINDEX.tar.gz
               ${'$'}BB wget -O ${'$'}IDX_COMM ${'$'}MIRROR/community/aarch64/APKINDEX.tar.gz
             }
             [ -f ${'$'}IDX_MAIN ] || ${'$'}BB wget -O ${'$'}IDX_MAIN ${'$'}MIRROR/main/aarch64/APKINDEX.tar.gz
             [ -f ${'$'}IDX_COMM ] || ${'$'}BB wget -O ${'$'}IDX_COMM ${'$'}MIRROR/community/aarch64/APKINDEX.tar.gz
+            # v2.7: decompress both indexes ONCE per run. Every stanza/provider
+            # lookup used to re-run tar+gunzip (hundreds of times under proot
+            # emulation); a 15-tool closure took 20+ minutes of pure resolve.
+            if [ ! -f ${'$'}IDXTXT ]; then
+              { ${'$'}BB tar -xzOf ${'$'}IDX_MAIN APKINDEX 2>/dev/null; ${'$'}BB tar -xzOf ${'$'}IDX_COMM APKINDEX 2>/dev/null; } > ${'$'}IDXTXT
+            fi
             dumpidx() {
-              ${'$'}BB tar -xzOf ${'$'}IDX_MAIN APKINDEX 2>/dev/null
-              ${'$'}BB tar -xzOf ${'$'}IDX_COMM APKINDEX 2>/dev/null
+              ${'$'}BB cat ${'$'}IDXTXT
             }
             stanza() {
               dumpidx | ${'$'}BB grep -A40 "^P:${'$'}1\$" | ${'$'}BB sed -n '1,/^$/p'
@@ -562,8 +615,12 @@ object Userland {
               echo "$(field "${'$'}1" P)-$(field "${'$'}1" V).apk"
             }
             provider() {
+              # provides lines are space-separated tokens (p:so:libA=1 so:libB=2).
+              # Fixed-string match (-F): sonames contain regex metachars
+              # (libstdc++.so.6 broke grep -E) and tokens sit anywhere in the
+              # line. Trailing = keeps D: dep lines (no version) from matching.
               soname=$(echo "${'$'}1" | ${'$'}BB cut -d: -f2 | ${'$'}BB cut -d= -f1)
-              dumpidx | ${'$'}BB grep -B60 "p:[^ ]*${'$'}soname" | ${'$'}BB grep '^P:' | ${'$'}BB tail -n1 | ${'$'}BB cut -c3-
+              dumpidx | ${'$'}BB grep -B60 -F "so:${'$'}soname=" | ${'$'}BB grep '^P:' | ${'$'}BB tail -n1 | ${'$'}BB cut -c3-
             }
             db_version() {
               ${'$'}BB grep "^${'$'}1 " ${'$'}DB 2>/dev/null | ${'$'}BB head -n1 | ${'$'}BB cut -d' ' -f2 || true
