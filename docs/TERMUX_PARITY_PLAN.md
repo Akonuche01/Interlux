@@ -128,6 +128,7 @@ Termux-baked shebangs rewritten at extract, and OPENSSL_CONF=/dev/null
 14. [ ] AI agent operator: tool-calling loop over the shell, audit log of every
     command+output, approve-per-command → approve-per-session, target allowlist,
     offline kill-switch. Model via agentrouter (deepseek), on-device SLM later.
+    **Status:** P1 skeleton done (daemon, WS transport, provider adapters, audit, shell tool + approvals). P2: full provider APIs.
 15. [ ] Pentest suite built-in: attested targets (done), safe presets (done),
     shareable reports (done) → plus nikto/hydra/ffuf/sqlmap one-tap recipes,
     findings export (markdown/PDF), scan history per target.

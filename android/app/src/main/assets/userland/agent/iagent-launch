@@ -1,0 +1,12 @@
+#!/system/bin/sh
+# iagent-launch — set up env, run the agent daemon.
+HERE="$(cd "$(dirname "$0")" && pwd)"
+U="$(cd "$HERE/.." && pwd)"
+export LD_LIBRARY_PATH="$U/lib:$U"
+export PYTHONHOME="$U"
+export PYTHONPATH="$U/site-packages:$U"
+export PATH="$U/bin:$PATH"
+export OPENSSL_CONF=/dev/null
+export SSL_CERT_FILE="$U/etc/ssl/certs/ca-certificates.crt"
+export HOME="$U/home"
+exec "$U/bin/python3" -m agent -p "${1:-4600}"

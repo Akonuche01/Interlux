@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# iagent — Interlux agent daemon launcher
+# Usage: iagent serve [--port 4600]
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+cmd="${1:-serve}"
+
+case "$cmd" in
+  serve)
+    shift || true
+    exec python3 "$SCRIPT_DIR/serve.py" "$@"
+    ;;
+  *)
+    echo "Usage: iagent serve [--port 4600]"
+    exit 1
+    ;;
+esac

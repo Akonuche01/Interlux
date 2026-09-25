@@ -11,3 +11,6 @@ build/
 *.ipr
 *.iws
 .DS_Store
+__pycache__/
+*.py[cod]
+agent/providers.json

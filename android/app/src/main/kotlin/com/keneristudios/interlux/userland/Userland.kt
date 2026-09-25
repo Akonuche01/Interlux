@@ -97,11 +97,12 @@ object Userland {
     //   copies real files only; emacs died on missing libacl.so.1).
     // v34 (db prune): fresh extracts prune the bionic DB to the seed —
     //   app updates wipe pkg.sh-installed files while the DB survived.
-    // v35 (pathfix): LD_PRELOAD libpathfix.so rewrites Termux-baked prefixes;
-    //   pkg.sh runs maintainer scripts (emacs pdump generation).
-    // v36 (pkg maintainer fix): run_maintainer's $BB was mis-escaped in the
-    //   Kotlin raw string ({'$'}BB literal) — postinst never ran.
-    private const val VERSION = "full-tools-30"
+     // v35 (pathfix): LD_PRELOAD libpathfix.so rewrites Termux-baked prefixes;
+     //   pkg.sh runs maintainer scripts (emacs pdump generation).
+     // v36 (pkg maintainer fix): run_maintainer's $BB was mis-escaped in the
+     //   Kotlin raw string ({'$'}BB literal) — postinst never ran.
+     // v37 (agent): daemon bundled in APK; agent-install.sh deps + launch script.
+     private const val VERSION = "full-tools-31"
     private const val ASSET_DIR = "userland"
     private const val DIR_NAME = "userland"
 
@@ -212,9 +213,9 @@ object Userland {
 
     /**
      * Asset subtrees mirrored 1:1 into the userland (bin/, lib/, libexec/,
-     * share/, etc/). 4k+ files: node/python/git/nmap/openssh/vim + closure.
+     * share/, etc/, agent/). 4k+ files: node/python/git/nmap/openssh/vim + closure.
      */
-    private val assetTrees = listOf("bin", "lib", "libexec", "share", "etc")
+    private val assetTrees = listOf("bin", "lib", "libexec", "share", "etc", "agent")
 
     private fun caFile(dir: File) =
         File(dir, "etc/ssl/certs/ca-certificates.crt")
