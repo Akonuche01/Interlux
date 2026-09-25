@@ -5,10 +5,13 @@ import 'package:flutter/services.dart';
 
 /// Talks to the native pty bridge over platform channels.
 ///
-/// One instance owns one shell session. Bytes coming back from the shell are
-/// decoded as UTF-8 before reaching the terminal emulator; a partial
-/// multi-byte sequence at the edge of a read is buffered until the rest
-/// arrives, so wide characters never corrupt across chunk boundaries.
+/// One instance owns one shell session (a native session id from `start`).
+/// Output arrives as tagged maps on the shared broadcast channel and is
+/// demultiplexed here by id; bytes for other tabs are ignored. Bytes coming
+/// back from the shell are decoded as UTF-8 before reaching the terminal
+/// emulator; a partial multi-byte sequence at the edge of a read is buffered
+/// until the rest arrives, so wide characters never corrupt across chunk
+/// boundaries.
 class PtyService {
   static const _method = MethodChannel('interlux/pty');
   static const _events = EventChannel('interlux/pty/events');
@@ -22,6 +25,9 @@ class PtyService {
   /// Fires when the shell closes the pty (EOF).
   Stream<void> get exited => _exited.stream;
 
+  /// Native session id from `start`. Null until booted.
+  int? _sessionId;
+
   bool _running = false;
   bool get isRunning => _running;
 
@@ -29,11 +35,27 @@ class PtyService {
 
   Future<void> start() async {
     if (_running) return;
-    await _method.invokeMethod('start');
+    final id = await _method.invokeMethod<int>('start');
+    if (id == null || id < 0) {
+      throw PlatformException(
+        code: 'PTY_CREATE_FAILED',
+        message: 'native session id missing',
+      );
+    }
+    _sessionId = id;
     _running = true;
 
     _subscription = _events.receiveBroadcastStream().listen(
-      (data) {
+      (event) {
+        // Tagged map from the native side: {id, data} or {id, end}.
+        if (event is! Map) return;
+        if (event['id'] != _sessionId) return;
+        if (event['end'] == true) {
+          _running = false;
+          _exited.add(null);
+          return;
+        }
+        final data = event['data'];
         if (data is Uint8List) {
           _handleBytes(data);
         } else if (data is String) {
@@ -74,19 +96,30 @@ class PtyService {
 
   Future<void> write(String input) async {
     if (!_running) return;
-    await _method.invokeMethod('write', {'data': utf8.encode(input)});
+    final id = _sessionId;
+    if (id == null) return;
+    await _method.invokeMethod('write', {'id': id, 'data': utf8.encode(input)});
   }
 
   Future<void> resize(int cols, int rows) async {
-    await _method.invokeMethod('resize', {'cols': cols, 'rows': rows});
+    final id = _sessionId;
+    if (id == null) return;
+    await _method.invokeMethod('resize', {
+      'id': id,
+      'cols': cols,
+      'rows': rows,
+    });
   }
 
   Future<void> stop() async {
     _running = false;
     await _subscription?.cancel();
     _subscription = null;
+    final id = _sessionId;
+    _sessionId = null;
+    if (id == null) return;
     try {
-      await _method.invokeMethod('stop');
+      await _method.invokeMethod('stop', {'id': id});
     } on PlatformException {
       // The pty may already be gone; that is fine.
     }

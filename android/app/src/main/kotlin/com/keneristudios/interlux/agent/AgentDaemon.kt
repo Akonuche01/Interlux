@@ -46,6 +46,15 @@ object AgentDaemon {
                 BootTracer.step("agent: already up on :$PORT")
                 return
             }
+            // A concurrent extract can still be mid-wipe (fresh installs);
+            // never spawn a daemon that cannot import. The next service
+            // start retries.
+            if (!File(userland, "agent/serve.py").exists() ||
+                !File(userland, "site-packages/websockets/__init__.py").exists()
+            ) {
+                BootTracer.stepPublic("agent: userland incomplete, deferring")
+                return
+            }
             killStale(appContext)
             spawn(appContext, userland)
             if (!waitUp()) {

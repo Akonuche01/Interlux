@@ -102,7 +102,11 @@ object Userland {
      // v36 (pkg maintainer fix): run_maintainer's $BB was mis-escaped in the
      //   Kotlin raw string ({'$'}BB literal) — postinst never ran.
      // v37 (agent): daemon bundled in APK; agent-install.sh deps + launch script.
-     private const val VERSION = "full-tools-31"
+     // v38 (tabs tool): + agent/tools/tabs.py (live-tab attach).
+     // v39 (deps): + site-packages/websockets (pure py3-none-any) — the v32
+     //   wipe proved third-party deps must ship in the APK, or the daemon
+     //   cannot import after any re-extract.
+     private const val VERSION = "full-tools-33"
     private const val ASSET_DIR = "userland"
     private const val DIR_NAME = "userland"
 
@@ -213,9 +217,13 @@ object Userland {
 
     /**
      * Asset subtrees mirrored 1:1 into the userland (bin/, lib/, libexec/,
-     * share/, etc/, agent/). 4k+ files: node/python/git/nmap/openssh/vim + closure.
+     * share/, etc/, agent/, site-packages/). 4k+ files: node/python/git/
+     * nmap/openssh/vim + closure; site-packages holds the daemon's only
+     * third-party dep (websockets, pure python) so re-extracts stay bootable.
      */
-    private val assetTrees = listOf("bin", "lib", "libexec", "share", "etc", "agent")
+    private val assetTrees = listOf(
+        "bin", "lib", "libexec", "share", "etc", "agent", "site-packages",
+    )
 
     private fun caFile(dir: File) =
         File(dir, "etc/ssl/certs/ca-certificates.crt")

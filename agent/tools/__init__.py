@@ -8,6 +8,7 @@ from .fs import fs_list, fs_read, fs_write
 from .git import git_status, git_log, git_diff
 from .pkg import pkg, READ_ACTIONS as PKG_READ_ACTIONS
 from .pty_run import pty_run
+from .tabs import tabs, READ_ACTIONS as TABS_READ_ACTIONS
 from .plugins import scan_plugins
 
 TOOLS = {
@@ -21,6 +22,7 @@ TOOLS = {
     "git_log": git_log,
     "git_diff": git_diff,
     "pkg": pkg,
+    "tabs": tabs,
 }
 
 WRITE_TOOLS = {"shell", "exec", "pty_run", "fs_write"}
@@ -37,6 +39,8 @@ def needs_approval(tool_name: str, params: dict) -> bool:
         return True
     if tool_name == "pkg":
         return str(params.get("action", "list")).lower() not in PKG_READ_ACTIONS
+    if tool_name == "tabs":
+        return str(params.get("action", "list")).lower() not in TABS_READ_ACTIONS
     return False
 
 
@@ -51,4 +55,9 @@ def approval_label(tool_name: str, params: dict) -> str:
     if tool_name == "pkg":
         pkgs = " ".join(params.get("packages") or [])
         return f"pkg {params.get('action', 'list')} {pkgs}".strip()
+    if tool_name == "tabs":
+        action = params.get("action", "list")
+        if action == "send":
+            return f"tabs send t{params.get('id')}: {str(params.get('data', ''))[:80]}"
+        return f"tabs {action}"
     return tool_name
