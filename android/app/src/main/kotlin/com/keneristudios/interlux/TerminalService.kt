@@ -36,6 +36,7 @@ class TerminalService : Service() {
             Thread {
                 com.keneristudios.interlux.agent.AgentDaemon.stop(this)
                 com.keneristudios.interlux.agent.TabBridge.stop()
+                com.keneristudios.interlux.agent.LlamaServer.stop(this)
             }.also { it.isDaemon = true; it.start() }
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
@@ -43,12 +44,13 @@ class TerminalService : Service() {
         }
         startForegroundService();
         BootTracer.step("TerminalService.started")
-        // Agent daemon + tab bridge follow the service lifecycle (launch,
-        // sticky restart, BOOT_COMPLETED all land here). Off the main thread;
-        // failures are logged, never fatal.
+        // Agent daemon + tab bridge + local LLM follow the service lifecycle
+        // (launch, sticky restart, BOOT_COMPLETED all land here). Off the main
+        // thread; failures are logged, never fatal.
         Thread {
             com.keneristudios.interlux.agent.AgentDaemon.ensure(this)
             com.keneristudios.interlux.agent.TabBridge.ensure()
+            com.keneristudios.interlux.agent.LlamaServer.ensure(this)
         }.also { it.isDaemon = true; it.start() }
         return START_STICKY
     }
