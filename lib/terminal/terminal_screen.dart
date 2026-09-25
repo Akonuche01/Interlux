@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:xterm/xterm.dart';
 
+import 'terminal_search.dart';
 import 'terminal_session.dart';
 import '../pentest/report.dart';
 import '../pentest/target.dart';
@@ -37,6 +38,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
   bool _ctrlHeld = false;
   bool _altHeld = false;
 
+  /// Scrollback search state (per screen, always on the active tab).
+  bool _searchOpen = false;
+  final TextEditingController _searchField = TextEditingController();
+  final FocusNode _searchFocus = FocusNode();
+  List<TerminalMatch> _matches = const [];
+  int _matchIndex = 0;
+
   TerminalSession get _active => _sessions[_activeIndex];
 
   @override
@@ -56,6 +64,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
       ..targetLabel = targetLabel
       ..command = run;
     session.addListener(_onSessionChanged);
+    if (_searchOpen) _closeSearch();
     setState(() {
       _sessions.add(session);
       _activeIndex = _sessions.length - 1;
@@ -68,6 +77,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
   }
 
   void _closeSession(int index) {
+    if (_searchOpen) _closeSearch();
     if (_sessions.length == 1) {
       // Never leave the user with no terminal: reset the last tab.
       final fresh = TerminalSession();
@@ -103,6 +113,94 @@ class _TerminalScreenState extends State<TerminalScreen> {
       session.exited = false;
     }
     if (mounted) setState(() {});
+  }
+
+  void _openSearch() {
+    // The terminal view holds autofocus; yield it or keystrokes keep going
+    // to the shell instead of the search field.
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _searchOpen = true;
+      _matches = const [];
+      _matchIndex = 0;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _searchOpen) _searchFocus.requestFocus();
+    });
+  }
+
+  void _closeSearch() {
+    _searchFocus.unfocus();
+    _active.controller.clearSelection();
+    _searchField.clear();
+    setState(() {
+      _searchOpen = false;
+      _matches = const [];
+      _matchIndex = 0;
+    });
+  }
+
+  /// Re-scan the active tab. Called on query change and every prev/next
+  /// press, so hits never go stale as output arrives.
+  void _refreshSearch() {
+    final query = _searchField.text;
+    if (!_searchOpen || query.isEmpty) {
+      _active.controller.clearSelection();
+      setState(() {
+        _matches = const [];
+        _matchIndex = 0;
+      });
+      return;
+    }
+    final matches = findTerminalMatches(_active.terminal, query);
+    var index = _matchIndex;
+    if (matches.isEmpty) {
+      _active.controller.clearSelection();
+      index = 0;
+    } else {
+      index = index.clamp(0, matches.length - 1);
+      if (!highlightTerminalMatch(
+        _active.terminal,
+        _active.controller,
+        matches[index],
+      )) {
+        // Buffer shifted under us; rescan once and take the nearest hit.
+        final fresh = findTerminalMatches(_active.terminal, query);
+        if (fresh.isEmpty) {
+          _active.controller.clearSelection();
+          setState(() {
+            _matches = const [];
+            _matchIndex = 0;
+          });
+          return;
+        }
+        index = index.clamp(0, fresh.length - 1);
+        highlightTerminalMatch(
+          _active.terminal,
+          _active.controller,
+          fresh[index],
+        );
+        setState(() {
+          _matches = fresh;
+          _matchIndex = index;
+        });
+        return;
+      }
+    }
+    setState(() {
+      _matches = matches;
+      _matchIndex = index;
+    });
+  }
+
+  void _stepSearch(int delta) {
+    if (_matches.isEmpty) {
+      _refreshSearch();
+      return;
+    }
+    _matchIndex = (_matchIndex + delta) % _matches.length;
+    if (_matchIndex < 0) _matchIndex += _matches.length;
+    _refreshSearch();
   }
 
   void _shareActiveReport() {
@@ -160,6 +258,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
   @override
   void dispose() {
+    _searchFocus.dispose();
+    _searchField.dispose();
     for (final session in _sessions) {
       session.removeListener(_onSessionChanged);
       session.dispose();
@@ -178,11 +278,25 @@ class _TerminalScreenState extends State<TerminalScreen> {
             _SessionTabBar(
               sessions: _sessions,
               activeIndex: _activeIndex,
-              onSelect: (i) => setState(() => _activeIndex = i),
+              onSelect: (i) {
+                if (_searchOpen) _closeSearch();
+                setState(() => _activeIndex = i);
+              },
               onClose: _closeSession,
               onAdd: _addSession,
               onTargets: _openTargets,
               onShare: _shareActiveReport,
+              onSearch: _openSearch,
+            ),
+            if (_searchOpen) _SearchBar(
+              field: _searchField,
+              matchText: _matches.isEmpty
+                  ? (_searchField.text.isEmpty ? '' : '0/0')
+                  : '${_matchIndex + 1}/${_matches.length}',
+              onChanged: (_) => _refreshSearch(),
+              onPrev: () => _stepSearch(-1),
+              onNext: () => _stepSearch(1),
+              onClose: _closeSearch,
             ),
             Expanded(
               child: TerminalView(
@@ -217,6 +331,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
           autofocus: true,
           hardwareKeyboardOnly: false,
           simulateScroll: true,
+          // visiblePassword disables IME composing/autocorrect: keystrokes
+          // commit immediately so the cursor tracks typed text instead of
+          // sitting left of an underlined composing preview. Autocorrect
+          // would corrupt shell input anyway.
+          keyboardType: TextInputType.visiblePassword,
         ),
       ),
       _ExtraKeysBar(
@@ -243,6 +362,7 @@ class _SessionTabBar extends StatelessWidget {
   final VoidCallback onAdd;
   final VoidCallback onTargets;
   final VoidCallback onShare;
+  final VoidCallback onSearch;
 
   const _SessionTabBar({
     required this.sessions,
@@ -252,6 +372,7 @@ class _SessionTabBar extends StatelessWidget {
     required this.onAdd,
     required this.onTargets,
     required this.onShare,
+    required this.onSearch,
   });
 
   @override
@@ -349,6 +470,97 @@ class _SessionTabBar extends StatelessWidget {
                 color: Color(0xFFE6E6E6),
               ),
             ),
+          ),
+          GestureDetector(
+            onTap: onSearch,
+            child: Container(
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              margin: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: const Color(0xFF232323),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Icon(
+                Icons.search,
+                size: 16,
+                color: Color(0xFFE6E6E6),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Scrollback search bar: query field, i/N counter, prev/next, close.
+///
+/// Matches highlight through the terminal selection; the bar sits above the
+/// terminal so output stays visible while searching.
+class _SearchBar extends StatelessWidget {
+  final TextEditingController field;
+  final String matchText;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onPrev;
+  final VoidCallback onNext;
+  final VoidCallback onClose;
+
+  const _SearchBar({
+    required this.field,
+    required this.matchText,
+    required this.onChanged,
+    required this.onPrev,
+    required this.onNext,
+    required this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xFF111111),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: field,
+              autofocus: true,
+              onChanged: onChanged,
+              onSubmitted: (_) => onNext(),
+              style: const TextStyle(color: Color(0xFFE6E6E6), fontSize: 14),
+              decoration: const InputDecoration(
+                hintText: 'Search scrollback',
+                hintStyle: TextStyle(color: Color(0xFF777777), fontSize: 14),
+                isDense: true,
+                border: InputBorder.none,
+              ),
+            ),
+          ),
+          Text(
+            matchText,
+            style: const TextStyle(color: Color(0xFF999999), fontSize: 13),
+          ),
+          IconButton(
+            onPressed: onPrev,
+            icon: const Icon(Icons.arrow_upward, size: 18),
+            color: const Color(0xFFE6E6E6),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+          ),
+          IconButton(
+            onPressed: onNext,
+            icon: const Icon(Icons.arrow_downward, size: 18),
+            color: const Color(0xFFE6E6E6),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+          ),
+          IconButton(
+            onPressed: onClose,
+            icon: const Icon(Icons.close, size: 18),
+            color: const Color(0xFFE6E6E6),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
           ),
         ],
       ),

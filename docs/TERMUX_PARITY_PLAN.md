@@ -132,8 +132,15 @@ Termux-baked shebangs rewritten at extract, and OPENSSL_CONF=/dev/null
 15. [ ] Pentest suite built-in: attested targets (done), safe presets (done),
     shareable reports (done) → plus nikto/hydra/ffuf/sqlmap one-tap recipes,
     findings export (markdown/PDF), scan history per target.
+    Proven 2026-09-25: nmap 7.99 + 613 NSE scripts, tmux 3.7c, whois live query.
+    PENDING (network-limited, resolver fixed): python3, py3-pip, git, curl,
+    bash, vim, bind-tools, nikto, hydra, ffuf, john, tcpdump; OSINT phase
+    (sherlock, maigret, holehe, h8mail, theHarvester); pwntools attempt with
+    Kara's psutil/PyNaCl patches.
 16. [ ] Modern terminal UX Termux never got: tabs (done), extra keys (done),
-    searchable scrollback, split panes, font/theme packs, URL tap-to-open.
+    searchable scrollback (done: find + highlight + counter + prev/next,
+    unit-tested, screenshot-proven; no auto-scroll yet), split panes,
+    font/theme packs, URL tap-to-open.
 17. [ ] Safety model for 2026 Android: consent ledger (every scan consented +
     logged), rootless-capability advisor ("needs raw sockets — unavailable
     without root" instead of silent failure), Play-independent update channel
