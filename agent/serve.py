@@ -10,7 +10,7 @@ from typing import AsyncIterator
 
 from .audit import AuditLog
 from .providers import PROVIDERS, BaseProvider
-from .tools import TOOLS
+from .tools import TOOLS, WRITE_TOOLS
 from .transport import Transport, broadcast
 
 logging.basicConfig(
@@ -75,10 +75,11 @@ async def run_tool_loop(turn: dict, client_socket) -> None:
         params = call.get("parameters", {})
         logger.info(f"Tool: {tool_name}, params: {params}")
 
-        if tool_name == "shell":
+        if tool_name in WRITE_TOOLS:
             thread_id = turn.get("thread_id", "default")
             fid = f"{thread_id}:{len(approvals.pending)}"
-            approval_params = {"command": params.get("command", ""), "id": fid}
+            label = params.get("command", params.get("path", tool_name))
+            approval_params = {"command": label, "id": fid}
 
             approval_future = approvals.request_approval(thread_id, approval_params)
             logger.info(f"Requesting approval: {fid}")
@@ -214,9 +215,11 @@ async def handle_request(payload: dict, client_socket) -> dict:
             return {
                 "id": request_id,
                 "result": {
+                    "protocol": 1,
                     "methods": ["turn", "cancel", "capabilities", "approve"],
                     "stream": True,
                     "providers": list(PROVIDERS.keys()),
+                    "tools": sorted(TOOLS.keys()),
                 },
             }
 
