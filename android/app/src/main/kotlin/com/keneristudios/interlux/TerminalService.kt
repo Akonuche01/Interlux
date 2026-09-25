@@ -33,12 +33,21 @@ class TerminalService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             BootTracer.step("TerminalService.stop-requested")
+            Thread {
+                com.keneristudios.interlux.agent.AgentDaemon.stop(this)
+            }.also { it.isDaemon = true; it.start() }
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
         }
         startForegroundService();
         BootTracer.step("TerminalService.started")
+        // Agent daemon follows the service lifecycle (launch, sticky
+        // restart, BOOT_COMPLETED all land here). Off the main thread;
+        // failures are logged, never fatal.
+        Thread {
+            com.keneristudios.interlux.agent.AgentDaemon.ensure(this)
+        }.also { it.isDaemon = true; it.start() }
         return START_STICKY
     }
 
