@@ -1,12 +1,10 @@
-"""OpenAI-compatible provider."""
+"""OpenAI-compatible provider (true SSE streaming over stdlib urllib)."""
 
-import json
 import logging
-import urllib.request
-import ssl
 from typing import AsyncIterator
 
 from .base import BaseProvider
+from .streaming import openai_chunks, post_sse
 
 logger = logging.getLogger("providers.openai")
 
@@ -24,24 +22,14 @@ class OpenAIProvider(BaseProvider):
             "model": model or "gpt-4o",
             "messages": messages,
             "temperature": temperature,
-            "stream": False,
+            "stream": True,
         }
 
         logger.info(f"Connecting to {url}")
         try:
-            data = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-            context = ssl.create_default_context()
-            with urllib.request.urlopen(req, context=context, timeout=60) as response:
-                logger.info(f"Response status: {response.status}")
-                body = response.read().decode("utf-8")
-                logger.info(f"Response text: {body[:500]}")
-                data = json.loads(body)
-                if "choices" in data and data["choices"]:
-                    content = data["choices"][0].get("message", {}).get("content", "")
-                    if content:
-                        yield {"type": "text_delta", "content": content}
-                yield {"type": "complete"}
+            async for delta in post_sse(url, headers, payload, openai_chunks):
+                yield delta
+            yield {"type": "complete"}
         except Exception as e:
             logger.error(f"OpenAI API error: {e}")
             yield {"type": "error", "message": str(e)}

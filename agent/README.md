@@ -35,6 +35,5 @@ Notifications:
 - `complete` / `error`
 
 ## Next (P2)
-- True streaming (chunked SSE) over stdlib `urllib` (no `httpx`/`h11` on-device)
-- More tools (fs, git)
-- Device testing (Interlux userland)
+- PATH/plugin tool registry, pty-attach to live tabs
+- (done) True streaming (chunked SSE) over stdlib `urllib`, fs/git/pkg/pty tools
