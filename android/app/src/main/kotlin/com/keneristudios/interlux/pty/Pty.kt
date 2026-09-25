@@ -28,11 +28,12 @@ import java.util.ArrayDeque
  * Live sessions are visible to [com.keneristudios.interlux.agent.TabBridge]
  * through [PtyHost] so the on-device agent can attach to real tabs.
  */
-class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
-    MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
+class Pty(
+    private val messenger: BinaryMessenger,
+    private val context: Context? = null,
+) : MethodChannel.MethodCallHandler {
 
     private val methodChannel = MethodChannel(messenger, "interlux/pty")
-    private val eventChannel = EventChannel(messenger, "interlux/pty/events")
 
     private data class Session(
         val id: Int,
@@ -41,11 +42,12 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
         @Volatile var alive: Boolean = true,
         val tap: ArrayDeque<ByteArray> = ArrayDeque(),
         var tapBytes: Int = 0,
+        var channel: EventChannel? = null,
+        var sink: EventChannel.EventSink? = null,
     )
 
     private val sessions = mutableMapOf<Int, Session>()
     private var nextId = 1
-    private var eventSink: EventChannel.EventSink? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
     companion object {
@@ -53,9 +55,27 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
         const val TAP_CAP = 65536
     }
 
+    /**
+     * One event channel per session (`interlux/pty/events/<id>`), each with
+     * its own sink. Sharing a single broadcast channel across tabs meant one
+     * tab's listen/cancel cycle could silence the others — now sessions are
+     * fully independent: separate fds, separate sinks, separate streams.
+     */
+    private inner class SessionEvents(val id: Int) : EventChannel.StreamHandler {
+        override fun onListen(arguments: Any?, sink: EventChannel.EventSink?) {
+            synchronized(sessions) { sessions[id]?.sink = sink }
+        }
+
+        override fun onCancel(arguments: Any?) {
+            synchronized(sessions) {
+                val session = sessions[id]
+                if (session?.sink != null) session.sink = null
+            }
+        }
+    }
+
     init {
         methodChannel.setMethodCallHandler(this)
-        eventChannel.setStreamHandler(this)
         PtyHost.instance = this
     }
 
@@ -93,6 +113,9 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
                     }
                     val session = synchronized(sessions) {
                         val s = Session(id = nextId++, fd = fd)
+                        s.channel = EventChannel(
+                            messenger, "interlux/pty/events/${s.id}"
+                        ).also { it.setStreamHandler(SessionEvents(s.id)) }
                         sessions[s.id] = s
                         s
                     }
@@ -139,14 +162,6 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
             }
             else -> result.notImplemented()
         }
-    }
-
-    override fun onListen(arguments: Any?, sink: EventChannel.EventSink?) {
-        eventSink = sink
-    }
-
-    override fun onCancel(arguments: Any?) {
-        eventSink = null
     }
 
     // -- Live-session surface for TabBridge ---------------------------------
@@ -223,10 +238,10 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
                 if (n <= 0) break
                 val chunk = if (n < buffer.size) buffer.copyOfRange(0, n) else buffer.copyOf()
                 appendTap(session, chunk)
-                emit { it.success(mapOf("id" to session.id, "data" to chunk)) }
+                emit(session) { it.success(chunk) }
             }
             session.alive = false
-            emit { it.success(mapOf("id" to session.id, "end" to true)) }
+            emit(session) { it.endOfStream() }
         }.also { it.start() }
     }
 
@@ -241,12 +256,21 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
     }
 
     /**
-     * Run [block] against the current sink on the main thread. Copying the
-     * reference first keeps a [stop] that clears the sink from racing the post.
+     * Deliver to this session's own sink on the main thread (sinks must only
+     * be touched there). No sink yet (Dart hasn't subscribed) means the
+     * output stays in the tap buffer; the next read still sees it.
      */
-    private inline fun emit(crossinline block: (EventChannel.EventSink) -> Unit) {
-        val sink = eventSink ?: return
-        mainHandler.post { block(sink) }
+    private inline fun emit(
+        session: Session,
+        crossinline block: (EventChannel.EventSink) -> Unit,
+    ) {
+        val sink = synchronized(sessions) { session.sink } ?: return
+        mainHandler.post {
+            try {
+                block(sink)
+            } catch (_: Exception) {
+            }
+        }
     }
 
     private fun stopSession(id: Int) {
@@ -267,7 +291,7 @@ class Pty(messenger: BinaryMessenger, private val context: Context? = null) :
             session.reader?.join(1000)
         } catch (_: InterruptedException) {
         }
-        emit { it.success(mapOf("id" to id, "end" to true)) }
+        emit(session) { it.endOfStream() }
     }
 
     private external fun nativeCreate(userlandPath: String?): Int

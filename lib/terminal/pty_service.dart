@@ -5,16 +5,19 @@ import 'package:flutter/services.dart';
 
 /// Talks to the native pty bridge over platform channels.
 ///
-/// One instance owns one shell session (a native session id from `start`).
-/// Output arrives as tagged maps on the shared broadcast channel and is
-/// demultiplexed here by id; bytes for other tabs are ignored. Bytes coming
-/// back from the shell are decoded as UTF-8 before reaching the terminal
-/// emulator; a partial multi-byte sequence at the edge of a read is buffered
-/// until the rest arrives, so wide characters never corrupt across chunk
-/// boundaries.
+/// One instance owns one shell session: `start` returns a native session id
+/// and output arrives on a dedicated channel (`interlux/pty/events/<id>`).
+/// Sessions are fully independent — opening, closing, or stalling one tab
+/// can never affect another's stream.
+///
+/// Bytes coming back from the shell are decoded as UTF-8 before reaching the
+/// terminal emulator; a partial multi-byte sequence at the edge of a read is
+/// buffered until the rest arrives, so wide characters never corrupt across
+/// chunk boundaries.
 class PtyService {
   static const _method = MethodChannel('interlux/pty');
-  static const _events = EventChannel('interlux/pty/events');
+
+  EventChannel? _events;
 
   final _output = StreamController<String>.broadcast();
   final _exited = StreamController<void>.broadcast();
@@ -45,17 +48,10 @@ class PtyService {
     _sessionId = id;
     _running = true;
 
-    _subscription = _events.receiveBroadcastStream().listen(
-      (event) {
-        // Tagged map from the native side: {id, data} or {id, end}.
-        if (event is! Map) return;
-        if (event['id'] != _sessionId) return;
-        if (event['end'] == true) {
-          _running = false;
-          _exited.add(null);
-          return;
-        }
-        final data = event['data'];
+    final events = EventChannel('interlux/pty/events/$id');
+    _events = events;
+    _subscription = events.receiveBroadcastStream().listen(
+      (data) {
         if (data is Uint8List) {
           _handleBytes(data);
         } else if (data is String) {
@@ -115,6 +111,7 @@ class PtyService {
     _running = false;
     await _subscription?.cancel();
     _subscription = null;
+    _events = null;
     final id = _sessionId;
     _sessionId = null;
     if (id == null) return;
