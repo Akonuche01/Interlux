@@ -24,3 +24,4 @@ flutter:
     - agent/
     - agent/providers/
     - agent/tools/
+    - agent/plugins/

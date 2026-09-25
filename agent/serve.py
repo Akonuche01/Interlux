@@ -10,8 +10,12 @@ from typing import AsyncIterator
 
 from .audit import AuditLog
 from .providers import PROVIDERS, BaseProvider
-from .tools import TOOLS, approval_label, needs_approval
+from .tools import EXTRA_WRITE, TOOLS, approval_label, needs_approval
+from .tools.plugins import scan_plugins
 from .transport import Transport, broadcast
+
+PLUGIN_DIR = Path(__file__).parent / "plugins"
+scan_plugins(PLUGIN_DIR, TOOLS, EXTRA_WRITE)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -215,11 +219,18 @@ async def handle_request(payload: dict, client_socket) -> dict:
                 "id": request_id,
                 "result": {
                     "protocol": 1,
-                    "methods": ["turn", "cancel", "capabilities", "approve"],
+                    "methods": ["turn", "cancel", "capabilities", "approve", "tools_refresh"],
                     "stream": True,
                     "providers": list(PROVIDERS.keys()),
                     "tools": sorted(TOOLS.keys()),
                 },
+            }
+
+        if method == "tools_refresh":
+            loaded = scan_plugins(PLUGIN_DIR, TOOLS, EXTRA_WRITE)
+            return {
+                "id": request_id,
+                "result": {"loaded": loaded, "tools": sorted(TOOLS.keys())},
             }
 
         if method == "turn":

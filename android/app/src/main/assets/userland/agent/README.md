@@ -8,7 +8,8 @@
 | `transport.py` | WebSocket JSON-RPC server |
 | `audit.py` | JSONL transcript |
 | `providers/` | OpenAI + Anthropic + Inception + Token Harbor adapters (stdlib `urllib`, no extra deps; `model` flows per-turn) |
-| `tools/` | Shell execution + extensible registry |
+| `tools/` | shell/exec/pty/fs/git/pkg + extensible registry |
+| `plugins/` | Drop-in `*.py` tools (auto-load at boot, `tools_refresh` hot-loads) |
 
 ## Run
 
@@ -25,9 +26,10 @@ python3 -m agent.test_kara
 
 | Method | Request | Response |
 |---|---|---|
-| `capabilities` | `{"id": 1, "method": "capabilities"}` | `{"result": {"methods": [...], "providers": [...]}}` |
+| `capabilities` | `{"id": 1, "method": "capabilities"}` | `{"result": {"protocol": 1, "methods": [...], "providers": [...], "tools": [...]}}` |
 | `turn` | `{"params": {"user": "...", "provider": "openai"}}` | `{"result": {"turn_id": "..."}}` |
 | `approve` | `{"params": {"id": "...", "decision": "accept"}}` | `{"result": true}` |
+| `tools_refresh` | `{"id": 4}` | `{"result": {"loaded": [...], "tools": [...]}}` |
 | `cancel` | `{"id": 3}` | `{"result": true}` |
 
 Notifications:
