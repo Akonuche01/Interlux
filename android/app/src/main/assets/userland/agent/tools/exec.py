@@ -4,6 +4,7 @@ import asyncio
 import shutil
 
 from .shell import _resolve_cwd
+from .track import track, untrack
 
 
 async def exec_tool(
@@ -24,14 +25,18 @@ async def exec_tool(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        key = track(proc)
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
-        except asyncio.TimeoutError:
             try:
-                proc.kill()
-            except Exception:
-                pass
-            return {"status": "error", "message": f"timed out after {timeout}s"}
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                return {"status": "error", "message": f"timed out after {timeout}s"}
+        finally:
+            untrack(key)
         return {
             "status": "success" if proc.returncode == 0 else "error",
             "stdout": stdout.decode() if stdout else "",

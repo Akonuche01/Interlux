@@ -3,6 +3,8 @@
 import asyncio
 import os
 
+from .track import track, untrack
+
 
 def _expand(path: str) -> str:
     return os.path.expandvars(os.path.expanduser(path))
@@ -17,7 +19,11 @@ async def _git(args: list[str], cwd: str) -> dict:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await proc.communicate()
+        key = track(proc)
+        try:
+            stdout, stderr = await proc.communicate()
+        finally:
+            untrack(key)
         return {
             "status": "success" if proc.returncode == 0 else "error",
             "stdout": stdout.decode() if stdout else "",

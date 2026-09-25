@@ -7,6 +7,7 @@ import subprocess
 import time
 
 from .shell import _resolve_cwd, _resolve_shell
+from .track import track, untrack
 
 
 def _run_blocking(command: str, cwd: str, shell: str, timeout: float) -> dict:
@@ -32,6 +33,7 @@ def _run_blocking(command: str, cwd: str, shell: str, timeout: float) -> dict:
         os.close(controller)
         return {"status": "error", "message": str(e)}
     os.close(sub)
+    key = track(proc)
     out = b""
     deadline = time.time() + timeout
     timed_out = False
@@ -78,6 +80,7 @@ def _run_blocking(command: str, cwd: str, shell: str, timeout: float) -> dict:
         code = proc.wait(timeout=5)
     except Exception:
         code = proc.poll()
+    untrack(key)
     try:
         os.close(controller)
     except Exception:

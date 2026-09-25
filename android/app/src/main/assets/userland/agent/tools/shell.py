@@ -5,6 +5,8 @@ import os
 import shutil
 import subprocess
 
+from .track import track, untrack
+
 INTERLUX_HOME = "/data/user/0/com.keneristudios.interlux/files/userland/home"
 
 
@@ -37,7 +39,11 @@ async def run_shell(command: str, cwd: str | None = None) -> dict:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await proc.communicate()
+        key = track(proc)
+        try:
+            stdout, stderr = await proc.communicate()
+        finally:
+            untrack(key)
 
         return {
             "status": "success" if proc.returncode == 0 else "error",

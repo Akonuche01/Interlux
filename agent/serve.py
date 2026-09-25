@@ -12,6 +12,8 @@ from .audit import AuditLog
 from .providers import PROVIDERS, BaseProvider
 from .tools import EXTRA_WRITE, TOOLS, approval_label, needs_approval
 from .tools.plugins import scan_plugins
+from .tools.track import current_turn as turn_ctx
+from .tools.track import kill_turn
 from .transport import Transport, broadcast
 
 PLUGIN_DIR = Path(__file__).parent / "plugins"
@@ -54,8 +56,21 @@ class ApprovalManager:
             return True
         return False
 
+    def drop_thread(self, thread_id: str) -> int:
+        """Cancel pending approvals for a thread (turn cancelled)."""
+        doomed = [fid for fid in self.pending if fid.split(":")[0] == thread_id]
+        for fid in doomed:
+            try:
+                self.pending[fid].cancel()
+            except Exception:
+                pass
+            del self.pending[fid]
+        return len(doomed)
+
 
 approvals = ApprovalManager()
+
+RUNNING: dict[str, asyncio.Task] = {}
 
 
 def load_provider(name: str, config: dict) -> BaseProvider | None:
@@ -122,28 +137,16 @@ async def run_tool_loop(turn: dict, client_socket) -> None:
             await broadcast({"type": "tool_result", **tool_output})
 
 
-async def handle_turn(payload: dict, client_socket) -> dict:
-    logger.info(f"handle_turn called with payload: {payload}")
-    params = payload.get("params", {})
-    user_msg = params.get("user", "")
-    provider_name = params.get("provider", "openai")
-    model = params.get("model", "gpt-4o")
-
-    thread_id = params.get("thread_id", f"thread-{len(audit.read_last())}")
-    session = Session(thread_id)
-    turn = {"id": f"{thread_id}:{len(session.turns)}", "user": user_msg, "thread_id": thread_id}
-    session.turns.append(turn)
-
-    config = json.loads(os.environ.get("INTERLUX_PROVIDERS", "{}"))
-    if not config:
-        try:
-            config_file = Path(__file__).parent / "providers.json"
-            if config_file.exists():
-                config = json.loads(config_file.read_text())
-        except Exception:
-            pass
-    provider = load_provider(provider_name, config.get(provider_name, {}))
-
+async def _execute_turn(
+    payload: dict,
+    params: dict,
+    user_msg: str,
+    provider: BaseProvider | None,
+    model: str,
+    thread_id: str,
+    turn: dict,
+    client_socket,
+) -> dict:
     messages = [{"role": "user", "content": user_msg}]
 
     turn["output"] = []
@@ -207,6 +210,53 @@ async def handle_turn(payload: dict, client_socket) -> dict:
     return {"id": payload.get("id"), "result": {"turn_id": turn["id"]}}
 
 
+async def handle_turn(payload: dict, client_socket) -> dict:
+    logger.info(f"handle_turn called with payload: {payload}")
+    params = payload.get("params", {})
+    user_msg = params.get("user", "")
+    provider_name = params.get("provider", "openai")
+    model = params.get("model", "gpt-4o")
+
+    thread_id = params.get("thread_id", f"thread-{len(audit.read_last())}")
+    session = Session(thread_id)
+    turn = {"id": f"{thread_id}:{len(session.turns)}", "user": user_msg, "thread_id": thread_id}
+    session.turns.append(turn)
+
+    config = json.loads(os.environ.get("INTERLUX_PROVIDERS", "{}"))
+    if not config:
+        try:
+            config_file = Path(__file__).parent / "providers.json"
+            if config_file.exists():
+                config = json.loads(config_file.read_text())
+        except Exception:
+            pass
+    provider = load_provider(provider_name, config.get(provider_name, {}))
+
+    RUNNING[turn["id"]] = asyncio.current_task()
+    token = turn_ctx.set(thread_id)
+    try:
+        return await _execute_turn(
+            payload, params, user_msg, provider, model,
+            thread_id, turn, client_socket,
+        )
+    except asyncio.CancelledError:
+        kill_turn(turn["id"])
+        approvals.drop_thread(thread_id)
+        turn["cancelled"] = True
+        try:
+            audit.append({"type": "turn", "thread_id": thread_id, **turn})
+        except Exception:
+            pass
+        await broadcast({"type": "cancelled", "turn_id": turn["id"]})
+        return {
+            "id": payload.get("id"),
+            "result": {"turn_id": turn["id"], "cancelled": True},
+        }
+    finally:
+        RUNNING.pop(turn["id"], None)
+        turn_ctx.reset(token)
+
+
 async def handle_request(payload: dict, client_socket) -> dict:
     """Process JSON-RPC request."""
     try:
@@ -244,6 +294,22 @@ async def handle_request(payload: dict, client_socket) -> dict:
             return {"id": request_id, "error": {"code": -32602, "message": "unknown fid"}}
 
         if method == "cancel":
+            tid = params.get("turn_id") or params.get("id") or ""
+            task = RUNNING.get(tid)
+            if task is None and params.get("thread_id"):
+                prefix = f"{params['thread_id']}:"
+                hit = next(
+                    (key for key in RUNNING if key.startswith(prefix)),
+                    None,
+                )
+                if hit is not None:
+                    tid, task = hit, RUNNING[hit]
+            if task is None:
+                return {"id": request_id, "result": False}
+            # Kill child processes BEFORE cancelling: the turn's finally
+            # blocks untrack first, which would hide them from kill_turn.
+            kill_turn(tid)
+            task.cancel()
             return {"id": request_id, "result": True}
 
         return {

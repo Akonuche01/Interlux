@@ -30,7 +30,7 @@ python3 -m agent.test_kara
 | `turn` | `{"params": {"user": "...", "provider": "openai"}}` | `{"result": {"turn_id": "..."}}` |
 | `approve` | `{"params": {"id": "...", "decision": "accept"}}` | `{"result": true}` |
 | `tools_refresh` | `{"id": 4}` | `{"result": {"loaded": [...], "tools": [...]}}` |
-| `cancel` | `{"id": 3}` | `{"result": true}` |
+| `cancel` | `{"params": {"thread_id": "..."}}` | `{"result": true}` + `cancelled` broadcast (kills tracked procs) |
 
 Notifications:
 - `approval_request` → `{"id": "...", "params": {"command": "..."}}`
