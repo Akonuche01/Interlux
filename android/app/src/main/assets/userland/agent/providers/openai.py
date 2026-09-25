@@ -13,7 +13,7 @@ logger = logging.getLogger("providers.openai")
 
 class OpenAIProvider(BaseProvider):
     async def stream_turn(
-        self, messages: list[dict], temperature: float = 0.7
+        self, messages: list[dict], temperature: float = 0.7, model: str = ""
     ) -> AsyncIterator[dict]:
         url = f"{self.base_url or 'https://api.openai.com/v1'}/chat/completions"
         headers = {
@@ -21,7 +21,7 @@ class OpenAIProvider(BaseProvider):
             "Content-Type": "application/json",
         }
         payload = {
-            "model": "gpt-4o",
+            "model": model or "gpt-4o",
             "messages": messages,
             "temperature": temperature,
             "stream": False,

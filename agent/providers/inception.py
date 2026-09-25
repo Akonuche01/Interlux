@@ -13,7 +13,7 @@ logger = logging.getLogger("providers.inception")
 
 class InceptionProvider(BaseProvider):
     async def stream_turn(
-        self, messages: list[dict], temperature: float = 0.7
+        self, messages: list[dict], temperature: float = 0.7, model: str = ""
     ) -> AsyncIterator[dict]:
         url = f"{self.base_url or 'https://api.inceptionlabs.ai/v1'}/chat/completions"
         headers = {
@@ -21,7 +21,7 @@ class InceptionProvider(BaseProvider):
             "Content-Type": "application/json",
         }
         payload = {
-            "model": "mercury-2.5",
+            "model": model or "mercury-2.5",
             "reasoning_effort": "low",
             "messages": messages,
             "temperature": temperature,

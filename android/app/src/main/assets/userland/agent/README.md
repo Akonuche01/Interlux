@@ -7,7 +7,7 @@
 | `serve.py` | Main daemon (session, transport, RPC, approvals) |
 | `transport.py` | WebSocket JSON-RPC server |
 | `audit.py` | JSONL transcript |
-| `providers/` | OpenAI + Anthropic + Inception adapters (stdlib `urllib`, no extra deps) |
+| `providers/` | OpenAI + Anthropic + Inception + Token Harbor adapters (stdlib `urllib`, no extra deps; `model` flows per-turn) |
 | `tools/` | Shell execution + extensible registry |
 
 ## Run

@@ -13,7 +13,7 @@ logger = logging.getLogger("providers.anthropic")
 
 class AnthropicProvider(BaseProvider):
     async def stream_turn(
-        self, messages: list[dict], temperature: float = 0.7
+        self, messages: list[dict], temperature: float = 0.7, model: str = ""
     ) -> AsyncIterator[dict]:
         url = f"{self.base_url or 'https://api.anthropic.com/v1'}/messages"
         headers = {
@@ -22,7 +22,7 @@ class AnthropicProvider(BaseProvider):
             "anthropic-version": "2023-06-01",
         }
         payload = {
-            "model": "claude-3-5-sonnet-20241022",
+            "model": model or "claude-3-5-sonnet-20241022",
             "messages": messages,
             "temperature": temperature,
             "max_tokens": 4096,

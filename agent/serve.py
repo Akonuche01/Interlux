@@ -259,7 +259,7 @@ async def stream_turn(
         return
 
     try:
-        async for delta in provider.stream_turn(messages):
+        async for delta in provider.stream_turn(messages, model=model):
             yield delta
     except Exception as e:
         yield {"type": "error", "message": str(e)}

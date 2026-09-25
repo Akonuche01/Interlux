@@ -13,7 +13,7 @@ class BaseProvider(ABC):
 
     @abstractmethod
     async def stream_turn(
-        self, messages: list[dict], temperature: float = 0.7
+        self, messages: list[dict], temperature: float = 0.7, model: str = ""
     ) -> AsyncIterator[dict]:
         """Yield delta events."""
         ...
