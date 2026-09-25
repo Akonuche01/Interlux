@@ -137,8 +137,15 @@ class _TerminalScreenState extends State<TerminalScreen> {
         activeIndex: _activeIndex,
         onPick: (i) => setState(() => _splitIndex = i),
         onNew: () {
+          // _addSession activates the new tab; keep the current tab active
+          // and split the fresh one, or both panes bind the same session
+          // and typing mirrors in both.
+          final keep = _activeIndex;
           _addSession();
-          setState(() => _splitIndex = _sessions.length - 1);
+          setState(() {
+            _activeIndex = keep;
+            _splitIndex = _sessions.length - 1;
+          });
         },
       ),
     );
@@ -358,13 +365,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
                         GestureDetector(
                           onTap: _toggleSplit,
                           child: Container(
-                            width: 6,
+                            width: 28,
                             color: const Color(0xFF2A2A2A),
                             child: const Center(
                               child: Icon(
-                                Icons.drag_handle,
-                                size: 12,
-                                color: Color(0xFF666666),
+                                Icons.close,
+                                size: 16,
+                                color: Color(0xFF999999),
                               ),
                             ),
                           ),
