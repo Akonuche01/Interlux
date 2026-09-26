@@ -11,8 +11,8 @@
 | 1 | Threads with streaming turns | turns + deltas + complete | PAR |
 | 2 | `exec` shell commands | shell/exec/pty_run | PAR |
 | 3 | File read | fs_read | PAR |
-| 4 | File surgically edit (apply_patch) | whole-file fs_write only | **GAP** |
-| 5 | File search (grep/glob) | none | **GAP** |
+| 4 | File surgically edit (apply_patch) | fs_edit exact-match replace (A) | PAR |
+| 5 | File search (grep/glob) | fs_search + fs_glob (A) | PAR |
 | 6 | Per-command approval (allow/deny) | per-call approve/deny | PAR |
 | 7 | Approval scopes (always/session) | turn/session grants in policy.json (B) | PAR |
 | 8 | Sandbox modes (read-only/workspace/full) | per-turn + policy default, fs gates (B) | PAR |
