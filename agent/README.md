@@ -154,14 +154,22 @@ Notifications:
 - Config at `~/.interlux/agent/mcp.json` (wipe-proof, optional):
 
   ```json
-  {"servers": {"echo": {"command": ["python3", "-u", "server.py"],
-                         "env": {}, "cwd": "..."}}}
+  {"servers": {
+    "local": {"command": ["python3", "-u", "server.py"], "env": {}},
+    "hosted": {"type": "http", "url": "https://mcp.example.com/mcp",
+               "headers": {"Authorization": "Bearer ..."}}}}
   ```
 
-- Transport is newline-delimited JSON-RPC 2.0 over stdio; handshake is
-  `initialize` → `notifications/initialized` → `tools/list` (each side
-  tolerates the other: unparseable stdout lines ignored, `ping` answered,
-  unknown server requests refused).
+- Transport is newline-delimited JSON-RPC 2.0 over stdio, or streamable
+  HTTP for `"type": "http"` servers (one POST per message; JSON or SSE
+  replies; sticky `Mcp-Session-Id`). Handshake is `initialize` →
+  `notifications/initialized` → `tools/list` on both; each side tolerates
+  the other (unparseable stdout lines ignored, `ping` answered, unknown
+  server requests refused). Header auth comes from config.
+  Failures (bad command, HTTP errors, handshake timeout, server exit,
+  stderr tail) are logged and visible in the `mcp` RPC — never silent.
+- Boundary: header auth only. Full OAuth (browser dance, refresh rotation)
+  needs app-side secure storage and is out of daemon scope.
 - Server tools register as `mcp_<server>__<tool>` through the same
   registry/approval/audit path as native tools: they land in `EXTRA_WRITE`
   (always ask first, session-grantable), tool errors (`isError`) surface as

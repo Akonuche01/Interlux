@@ -176,6 +176,10 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   approvals, unique item ids across rounds, cap 8, subagent/completed
   broadcasts). Device proof 11/11 E2E (fan-out, isolation, child approval,
   cancel, broadcasts).
+- Epic Q SHIPPED: MCP remote servers (streamable HTTP: JSON/SSE replies,
+  session stickiness, header auth, loud 401/refused reporting; OAuth
+  explicitly deferred app-side). Device proof 5/5 E2E against a local HTTP
+  stub (both transports live, approval, restart) + grants/J regression.
 
 ## Notes
 - Interlux and Code Studio are SEPARATE apps.

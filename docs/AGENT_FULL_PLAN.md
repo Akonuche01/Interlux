@@ -18,7 +18,7 @@
 | 8 | Sandbox modes (read-only/workspace/full) | per-turn + policy default, fs gates (B) | PAR |
 | 9 | Sessions resume/fork/compact | thread/resume\|fork\|compact + memories (C) | PAR |
 | 10 | Skills (markdown + tools) | markdown skills + catalog + skill_load + skill tool plugins (D) | PAR |
-| 11 | MCP servers (external tools) | stdio client + mcp_<server>__<tool> proxies (E) | PAR |
+| 11 | MCP servers (external tools) | stdio + streamable-HTTP clients, header auth (E/Q) | PAR |
 | 12 | Web search | web_search tool, config-driven, read-only (F) | PAR |
 | 13 | Token usage + cost per turn | normalized usage in result + broadcast + audit (F) | PAR |
 | 14 | Plan mode (read-only loop) | turn mode plan, pre-approval block (G) | PAR |
@@ -138,6 +138,7 @@ MCP client (`mcp_<server>__<tool>`), per-turn providers, sandboxes, audit.
 | I | Kara surface: `thread/list`+`read`, item events, keys RPC, steer, client tools | daemon-side; §6 M1–M5 |
 | J | Autonomous multi-step turn loop (model↔tools, bounded) | SHIPPED (max_rounds, fold-per-round, cap 10, rounds in result/audit) |
 | P | Subagents (parallel background turns on child threads) | SHIPPED (spawn/status/result/list/cancel, fork context, per-thread approvals, cap 8) |
+| Q | MCP remote servers (streamable HTTP + header auth) | SHIPPED (JSON/SSE replies, session stickiness, loud failures; OAuth deferred app-side) |
 | K | Terminal tails: Termux:API CLI shims, URL-tap cert, font/theme packs, scrollback auto-scroll, libselinux tidy | app-side, slower loop |
 | L | Pentest depth: OSINT set, pwntools, one-tap recipes, findings export, scan history | guest + app |
 | M | Package depth: Perl/Ruby tail, rust/openjdk, Debian/Kali tarballs, APKINDEX SIGN | guest + userland |
