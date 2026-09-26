@@ -9,6 +9,7 @@ from .git import git_status, git_log, git_diff
 from .pkg import pkg, READ_ACTIONS as PKG_READ_ACTIONS
 from .pty_run import pty_run
 from .tabs import tabs, READ_ACTIONS as TABS_READ_ACTIONS
+from .image import image_generate
 from .plugins import scan_plugins
 
 TOOLS = {
@@ -26,9 +27,10 @@ TOOLS = {
     "git_diff": git_diff,
     "pkg": pkg,
     "tabs": tabs,
+    "image_generate": image_generate,
 }
 
-WRITE_TOOLS = {"shell", "exec", "pty_run", "fs_write", "fs_edit"}
+WRITE_TOOLS = {"shell", "exec", "pty_run", "fs_write", "fs_edit", "image_generate"}
 
 EXTRA_WRITE: set[str] = set()
 
@@ -48,13 +50,13 @@ def needs_approval(tool_name: str, params: dict) -> bool:
 
 
 def approval_label(tool_name: str, params: dict) -> str:
-    """Short human label for the approval prompt."""
-    if "command" in params:
-        return str(params["command"])
+    """Short human label for the approval prompt.
+
+    Tool-specific branches first: generic command/path fallbacks below
+    would otherwise shadow them.
+    """
     if tool_name == "exec":
         return " ".join([str(params.get("name", "exec"))] + [str(a) for a in params.get("args", [])])
-    if "path" in params:
-        return f"{tool_name} {params['path']}"
     if tool_name == "pkg":
         pkgs = " ".join(params.get("packages") or [])
         return f"pkg {params.get('action', 'list')} {pkgs}".strip()
@@ -63,4 +65,10 @@ def approval_label(tool_name: str, params: dict) -> str:
         if action == "send":
             return f"tabs send t{params.get('id')}: {str(params.get('data', ''))[:80]}"
         return f"tabs {action}"
+    if tool_name == "image_generate":
+        return f"image ({params.get('model', '?')}): {str(params.get('prompt', ''))[:100]}"
+    if "command" in params:
+        return str(params["command"])
+    if "path" in params:
+        return f"{tool_name} {params['path']}"
     return tool_name

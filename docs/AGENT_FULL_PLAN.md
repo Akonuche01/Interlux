@@ -77,6 +77,9 @@
   content blocks (OpenAI + Anthropic shapes); `media: ["image"]` advertised
   in capabilities. Proven on-device: phone screenshot → free-tier vision
   model answered correctly through the full turn flow.
+- `image_generate` tool: OpenAI-compatible Images API → file, approval-gated
+  with model + prompt in the label, viewable roundtrip via image turns.
+  Blocked on billing (402) until wallet top-up; plumbing + errors proven.
 
 ## 3. Where Codex falls short (Interlux upgrades, not parity)
 

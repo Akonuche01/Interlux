@@ -8,7 +8,7 @@
 | `transport.py` | WebSocket JSON-RPC server |
 | `audit.py` | JSONL transcript |
 | `providers/` | OpenAI + Anthropic + Inception + Token Harbor + local (llama-server) adapters (stdlib `urllib`, no extra deps; `model` flows per-turn) |
-| `tools/` | shell/exec/pty/fs/git/pkg + extensible registry |
+| `tools/` | shell/exec/pty/fs/git/pkg/tabs/image_generate + registry |
 | `plugins/` | Drop-in `*.py` tools (auto-load at boot, `tools_refresh` hot-loads) |
 
 ## Run

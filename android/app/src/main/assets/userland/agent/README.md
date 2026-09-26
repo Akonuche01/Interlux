@@ -8,7 +8,7 @@
 | `transport.py` | WebSocket JSON-RPC server |
 | `audit.py` | JSONL transcript |
 | `providers/` | OpenAI + Anthropic + Inception + Token Harbor + local (llama-server) adapters (stdlib `urllib`, no extra deps; `model` flows per-turn) |
-| `tools/` | shell/exec/pty/fs/git/pkg + extensible registry |
+| `tools/` | shell/exec/pty/fs/git/pkg/tabs/image_generate + registry |
 | `plugins/` | Drop-in `*.py` tools (auto-load at boot, `tools_refresh` hot-loads) |
 
 ## Run
@@ -28,6 +28,7 @@ python3 -m agent.test_kara
 |---|---|---|
 | `capabilities` | `{"id": 1, "method": "capabilities"}` | `{"result": {"protocol": 1, "methods": [...], "providers": [...], "tools": [...]}}` |
 | `turn` | `{"params": {"user": "...", "provider": "openai"}}` | `{"result": {"turn_id": "..."}}` |
+| `turn` + images | `{"params": {"user": "...", "images": ["<path or data: URL>"]}}` | same, model sees the images |
 | `approve` | `{"params": {"id": "...", "decision": "accept"}}` | `{"result": true}` |
 | `tools_refresh` | `{"id": 4}` | `{"result": {"loaded": [...], "tools": [...]}}` |
 | `cancel` | `{"params": {"thread_id": "..."}}` | `{"result": true}` + `cancelled` broadcast (kills tracked procs) |
