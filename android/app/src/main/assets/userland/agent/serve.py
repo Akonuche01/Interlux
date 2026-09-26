@@ -22,6 +22,20 @@ from .policy import (
     sandbox_ctx,
 )
 from .providers import PROVIDERS, BaseProvider
+from .threads import (
+    build_messages,
+    fork_state,
+    load_state,
+    materialize_state,
+    memories_path,
+    new_state,
+    read_memories,
+    record_turn,
+    save_state,
+    state_path,
+    transcript_text,
+    write_memories,
+)
 from .tools import EXTRA_WRITE, TOOLS, approval_label, needs_approval
 from .tools.plugins import scan_plugins
 from .tools.track import current_turn as turn_ctx
@@ -36,13 +50,6 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger("iagent")
-
-
-class Session:
-    def __init__(self, thread_id: str):
-        self.thread_id = thread_id
-        self.turns: list[dict] = []
-        self.cancel_requested = False
 
 
 audit = AuditLog()
@@ -124,6 +131,29 @@ def load_provider(name: str, config: dict) -> BaseProvider | None:
         config.get("api_key", ""),
         config.get("base_url"),
     )
+
+
+def provider_config() -> dict:
+    """Turn-env override first, then wipe-proof home, then bundled file."""
+    config = json.loads(os.environ.get("INTERLUX_PROVIDERS", "{}"))
+    if config:
+        return config
+    home = os.environ.get("HOME") or str(Path.home())
+    candidates = [
+        Path(home) / ".interlux/agent/providers.json",
+        Path(__file__).parent / "providers.json",
+    ]
+    for config_file in candidates:
+        try:
+            if config_file.exists():
+                return json.loads(config_file.read_text())
+        except Exception:
+            pass
+    return {}
+
+
+def make_provider(name: str) -> BaseProvider | None:
+    return load_provider(name, provider_config().get(name, {}))
 
 
 async def run_tool_loop(turn: dict, client_socket) -> None:
@@ -212,8 +242,9 @@ async def _execute_turn(
     thread_id: str,
     turn: dict,
     client_socket,
+    messages: list[dict],
+    state: dict,
 ) -> dict:
-    messages = [{"role": "user", "content": user_msg}]
     images = params.get("images") or []
     api = params.get("api", "chat")
     if api not in ("chat", "responses"):
@@ -274,6 +305,11 @@ async def _execute_turn(
     await run_tool_loop(turn, client_socket)
 
     turn["complete"] = True
+    # Epic C: persist history so later turns / resume see this conversation.
+    try:
+        record_turn(state, user_msg, turn["output"])
+    except Exception:
+        logger.exception("failed to persist thread state")
     try:
         audit.append({"type": "turn", "thread_id": thread_id, **turn})
     except Exception:
@@ -291,34 +327,18 @@ async def handle_turn(payload: dict, client_socket) -> dict:
     model = params.get("model", "gpt-4o")
 
     thread_id = params.get("thread_id", f"thread-{len(audit.read_last())}")
-    session = Session(thread_id)
+    # Epic C: thread state = history + base + turn counter (wipe-proof home).
+    state = load_state(thread_id) or new_state(thread_id)
     # Epic B: turn param wins; policy.json default otherwise.
     sandbox = resolve_sandbox(params, load_policy())
     turn = {
-        "id": f"{thread_id}:{len(session.turns)}",
+        "id": f"{thread_id}:{state['turns']}",
         "user": user_msg,
         "thread_id": thread_id,
         "sandbox": sandbox["mode"],
     }
-    session.turns.append(turn)
 
-    config = json.loads(os.environ.get("INTERLUX_PROVIDERS", "{}"))
-    if not config:
-        # Wipe-proof home config first (survives userland re-extracts),
-        # bundled agent/providers.json as fallback.
-        home = os.environ.get("HOME") or str(Path.home())
-        candidates = [
-            Path(home) / ".interlux/agent/providers.json",
-            Path(__file__).parent / "providers.json",
-        ]
-        for config_file in candidates:
-            try:
-                if config_file.exists():
-                    config = json.loads(config_file.read_text())
-                    break
-            except Exception:
-                pass
-    provider = load_provider(provider_name, config.get(provider_name, {}))
+    provider = make_provider(provider_name)
 
     RUNNING[turn["id"]] = asyncio.current_task()
     token = turn_ctx.set(thread_id)
@@ -327,6 +347,7 @@ async def handle_turn(payload: dict, client_socket) -> dict:
         return await _execute_turn(
             payload, params, user_msg, provider, model,
             thread_id, turn, client_socket,
+            build_messages(state, thread_id, user_msg), state,
         )
     except asyncio.CancelledError:
         kill_turn(turn["id"])
@@ -362,6 +383,8 @@ async def handle_request(payload: dict, client_socket) -> dict:
                     "methods": [
                         "turn", "cancel", "capabilities", "approve",
                         "tools_refresh", "policy",
+                        "thread/resume", "thread/fork", "thread/compact",
+                        "memories",
                     ],
                     "stream": True,
                     "providers": list(PROVIDERS.keys()),
@@ -410,6 +433,152 @@ async def handle_request(payload: dict, client_socket) -> dict:
             if revoked is not None:
                 result["revoked"] = revoked
             return {"id": request_id, "result": result}
+
+        if method == "thread/resume":
+            # Open a thread: state file first, audit replay fallback,
+            # brand-new empty thread otherwise (idempotent).
+            tid = str(params.get("thread_id") or "").strip()
+            if not tid:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602, "message": "thread_id required"},
+                }
+            state, source = materialize_state(tid)
+            return {
+                "id": request_id,
+                "result": {
+                    "thread_id": tid,
+                    "source": source,
+                    "turns": state["turns"],
+                    "base": state.get("base", ""),
+                    "history": state["history"],
+                    "memories": read_memories(tid),
+                    "path": str(state_path(tid)),
+                },
+            }
+
+        if method == "thread/fork":
+            src = str(params.get("thread_id") or "").strip()
+            if not src:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602, "message": "thread_id required"},
+                }
+            dst = str(params.get("to") or params.get("new_thread_id") or "").strip()
+            if not dst:
+                dst, n = f"{src}-fork", 2
+                while state_path(dst).exists():
+                    dst, n = f"{src}-fork-{n}", n + 1
+            elif state_path(dst).exists():
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602, "message": f"target thread exists: {dst}"},
+                }
+            try:
+                forked = fork_state(src, dst)
+            except FileNotFoundError as e:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602, "message": str(e)},
+                }
+            audit.append({"type": "fork", "from": src, "to": dst, "thread_id": dst})
+            return {
+                "id": request_id,
+                "result": {
+                    "thread_id": dst,
+                    "from": src,
+                    "turns": forked["turns"],
+                    "history_len": len(forked["history"]),
+                    "base": forked.get("base", ""),
+                    "path": str(state_path(dst)),
+                },
+            }
+
+        if method == "thread/compact":
+            # Model summarizes the transcript into a persistent base message;
+            # history resets; audit keeps a compact marker.
+            tid = str(params.get("thread_id") or "").strip()
+            if not tid:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602, "message": "thread_id required"},
+                }
+            state, _source = materialize_state(tid)
+            if not state["history"]:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602, "message": "nothing to compact"},
+                }
+            provider = make_provider(str(params.get("provider", "openai")))
+            if provider is None:
+                return {
+                    "id": request_id,
+                    "error": {
+                        "code": -32602,
+                        "message": f"provider not available: {params.get('provider', 'openai')}",
+                    },
+                }
+            prompt = (
+                "Summarize this terminal-agent conversation for continuity. "
+                "Keep: decisions made, file paths, commands run, results that "
+                "matter, and open tasks. Drop chatter. Be dense and factual."
+                "\n\n" + transcript_text(state)
+            )
+            summary, err = "", None
+            async for delta in provider.stream_turn(
+                [{"role": "user", "content": prompt}],
+                model=str(params.get("model", "gpt-4o")),
+                images=None,
+                api="chat",
+                stream=False,
+            ):
+                if delta.get("type") == "text_delta":
+                    summary += delta.get("content", "")
+                elif delta.get("type") == "error":
+                    err = delta.get("message", "provider error")
+            if err or not summary.strip():
+                return {
+                    "id": request_id,
+                    "error": {"code": -32700, "message": f"compact failed: {err or 'empty summary'}"},
+                }
+            prior_turns = state["turns"]
+            state["base"] = summary.strip()
+            state["history"] = []
+            save_state(state)
+            audit.append({
+                "type": "compact",
+                "thread_id": tid,
+                "summary": state["base"],
+                "turns_before": prior_turns,
+            })
+            return {
+                "id": request_id,
+                "result": {
+                    "thread_id": tid,
+                    "summary": state["base"],
+                    "turns_before": prior_turns,
+                    "path": str(state_path(tid)),
+                },
+            }
+
+        if method == "memories":
+            # Client-writable per-thread notes the daemon injects as system msg.
+            tid = str(params.get("thread_id") or "").strip()
+            if not tid:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602, "message": "thread_id required"},
+                }
+            if "content" in params:
+                write_memories(tid, str(params.get("content") or ""))
+            return {
+                "id": request_id,
+                "result": {
+                    "thread_id": tid,
+                    "memories": read_memories(tid),
+                    "path": str(memories_path(tid)),
+                },
+            }
 
         if method == "cancel":
             tid = params.get("turn_id") or params.get("id") or ""

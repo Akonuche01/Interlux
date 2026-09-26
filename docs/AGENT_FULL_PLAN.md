@@ -99,6 +99,7 @@
 |---|---|---|
 | `tools_refresh` | hot-load plugins (shipped) | — |
 | `thread/resume`, `thread/fork`, `thread/compact` | session memory | C |
+| `memories` | per-thread client notes (daemon injects) | C |
 | `approve` + `scope` param | turn/session grants | B |
 | `policy` | get/set sandbox + grants | B |
 | `skills` | list loaded skills | D |
