@@ -3,13 +3,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import logging
 from pathlib import Path
 from typing import AsyncIterator
 
 from .audit import AuditLog
 from . import mcp as mcp_mod
+from .pconfig import make_provider
 from .policy import (
     GRANT_SCOPES,
     SANDBOX_MODES,
@@ -164,46 +164,13 @@ approvals = ApprovalManager()
 RUNNING: dict[str, asyncio.Task] = {}
 
 
-def load_provider(name: str, config: dict) -> BaseProvider | None:
-    if name not in PROVIDERS:
-        return None
-    if not isinstance(config, dict):
-        config = {}
-    return PROVIDERS[name](
-        config.get("api_key", ""),
-        config.get("base_url"),
-    )
-
-
-def provider_config() -> dict:
-    """Turn-env override first, then wipe-proof home, then bundled file."""
-    config = json.loads(os.environ.get("INTERLUX_PROVIDERS", "{}"))
-    if config:
-        return config
-    home = os.environ.get("HOME") or str(Path.home())
-    candidates = [
-        Path(home) / ".interlux/agent/providers.json",
-        Path(__file__).parent / "providers.json",
-    ]
-    for config_file in candidates:
-        try:
-            if config_file.exists():
-                return json.loads(config_file.read_text())
-        except Exception:
-            pass
-    return {}
-
-
-def make_provider(name: str) -> BaseProvider | None:
-    return load_provider(name, provider_config().get(name, {}))
-
-
 async def run_tool_loop(turn: dict, client_socket) -> None:
     """Execute tool calls with approval flow."""
     tool_calls = turn.get("tool_calls", [])
     logger.info(f"Processing {len(tool_calls)} tool call(s)")
 
     sandbox_mode = turn.get("sandbox", "full") or "full"
+    turn_mode = turn.get("mode", "exec") or "exec"
     thread_id = turn.get("thread_id", "default")
     # Standing grants live on disk and survive turns; load once per loop.
     policy = load_policy()
@@ -214,12 +181,19 @@ async def run_tool_loop(turn: dict, client_socket) -> None:
         logger.info(f"Tool: {tool_name}, params: {params}")
 
         if needs_approval(tool_name, params):
+            # Epic G: plan mode blocks writes explicitly, like read-only
+            # sandbox but as a declared intent ("look, don't touch").
+            reason = ""
             if sandbox_mode == "read-only":
-                logger.info(f"Blocked by read-only sandbox: {tool_name}")
+                reason = "sandbox is read-only"
+            elif turn_mode == "plan":
+                reason = "turn is plan mode (no writes)"
+            if reason:
+                logger.info(f"Blocked ({reason}): {tool_name}")
                 blocked = {
                     "tool": tool_name,
                     "status": "error",
-                    "message": f"write tool {tool_name!r} blocked: sandbox is read-only",
+                    "message": f"write tool {tool_name!r} blocked: {reason}",
                 }
                 turn["output"].append(blocked)
                 await broadcast({"type": "tool_result", **blocked})
@@ -387,11 +361,16 @@ async def handle_turn(payload: dict, client_socket) -> dict:
     state = load_state(thread_id) or new_state(thread_id)
     # Epic B: turn param wins; policy.json default otherwise.
     sandbox = resolve_sandbox(params, load_policy())
+    # Epic G: turn mode — "exec" (default) or "plan" (no writes, explicit).
+    mode = params.get("mode", "exec")
+    if mode not in ("exec", "plan"):
+        mode = "exec"
     turn = {
         "id": f"{thread_id}:{state['turns']}",
         "user": user_msg,
         "thread_id": thread_id,
         "sandbox": sandbox["mode"],
+        "mode": mode,
     }
 
     provider = make_provider(provider_name)
@@ -451,6 +430,7 @@ async def handle_request(payload: dict, client_socket) -> dict:
                     "tools": sorted(TOOLS.keys()),
                     "media": ["image"],
                     "apis": ["chat", "responses"],
+                    "modes": ["exec", "plan"],
                     "sandboxes": list(SANDBOX_MODES),
                     "approve_scopes": list(GRANT_SCOPES),
                 },

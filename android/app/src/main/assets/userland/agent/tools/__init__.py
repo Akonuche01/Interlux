@@ -11,6 +11,7 @@ from .pty_run import pty_run
 from .tabs import tabs, READ_ACTIONS as TABS_READ_ACTIONS
 from .image import image_generate
 from .websearch import web_search
+from .review import review
 from .plugins import scan_plugins
 
 TOOLS = {
@@ -30,6 +31,7 @@ TOOLS = {
     "tabs": tabs,
     "image_generate": image_generate,
     "web_search": web_search,
+    "review": review,
 }
 
 WRITE_TOOLS = {"shell", "exec", "pty_run", "fs_write", "fs_edit", "image_generate"}

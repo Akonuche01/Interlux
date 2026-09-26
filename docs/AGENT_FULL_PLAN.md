@@ -21,8 +21,8 @@
 | 11 | MCP servers (external tools) | stdio client + mcp_<server>__<tool> proxies (E) | PAR |
 | 12 | Web search | web_search tool, config-driven, read-only (F) | PAR |
 | 13 | Token usage + cost per turn | normalized usage in result + broadcast + audit (F) | PAR |
-| 14 | Plan mode (read-only loop) | none | **GAP** |
-| 15 | Review flows (diff review) | git_diff exists, no flow | **GAP** |
+| 14 | Plan mode (read-only loop) | turn mode plan, pre-approval block (G) | PAR |
+| 15 | Review flows (diff review) | review tool + review skill (G) | PAR |
 | 16 | Streaming deltas | true SSE | PAR |
 | 17 | Multi-provider + local | 5 providers + llama | AHEAD |
 | 18 | Live tab attach | tabs tool + bridge | AHEAD |

@@ -45,7 +45,9 @@ python3 -m agent.test_kara
 | `mcp` | `{"params": {}}` or `{"params": {"restart": true}}` | `{"result": {"servers": [{"name", "status", "tools", "error"}], "config": "...", "registered_tools": [...]}}` |
 
 Turn params also take `sandbox` (`full` default | `workspace` | `read-only`)
-and `sandbox_root` (workspace confinement root, default `$HOME`).
+and `sandbox_root` (workspace confinement root, default `$HOME`), plus
+`mode` (`exec` default | `plan` — plan blocks write tools pre-approval,
+like read-only but as declared intent).
 
 Notifications:
 - `approval_request` → `{"id": "...", "params": {"command": "..."}}`
@@ -161,6 +163,26 @@ Notifications:
   non-streamed full bodies. Surfaced three ways: live `usage` broadcast,
   `turn` result field, and the audit record. Never stored in thread
   history (kept out of model context).
+
+## Plan mode + review flow (Epic G)
+
+- Turn `mode: "plan"` ("look, don't touch"): write-class tools are blocked
+  **before** the approval prompt with an explicit `plan mode` error, in any
+  sandbox. `exec` (default) is unchanged. The mode is recorded on the turn
+  (history + audit); capabilities advertise `modes: ["exec", "plan"]`.
+- `review` tool (read-only, no approval): the review recipe executable —
+  `git_diff(cwd)` → model critique → structured findings
+  (`SUMMARY:` + `- [severity] file:LINE issue -> suggestion` lines).
+  Returns `{status, repo, diff_stat, findings}`. Empty diff → clean verdict
+  without spending a model call; unknown provider / git failure → explicit
+  error. Critique runs one-shot (`stream: false`) and never broadcasts.
+- `review` skill (bundled): the flow, the findings schema, and the rule to
+  run review turns in `mode: "plan"`.
+- Shared config lives in `pconfig.py` (`provider_config`, `config_section`,
+  `make_provider`) so tools and the daemon read the same source.
+- Device note: the userland git is Termux-built with a bogus baked-in
+  system gitconfig path — `tools/git.py` disables it (`GIT_CONFIG_NOSYSTEM`
+  + `GIT_CONFIG_SYSTEM=/dev/null`) for every git subprocess.
 
 ## Next (P2)
 - PATH/plugin tool registry, pty-attach to live tabs

@@ -146,6 +146,13 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   regression (llama accepts stream_options, responses fallback, cancel,
   deny). Noted: TokenHarbor 404s the daemon-default gpt-4o (unknown model
   on that gateway); explicit deepseek model required.
+- Epic G SHIPPED: plan mode (turn mode plan blocks writes pre-approval in
+  any sandbox; mode recorded; modes advertised) + review recipe as an
+  executable read-only tool (git_diff -> model critique -> structured
+  findings) + bundled review skill. Shared config extracted to
+  agent/pconfig.py. Fixed userland git's fatal Termux-baked system
+  gitconfig path (disabled per-subprocess). Device proof 10/10 E2E (plan
+  block, exec flow intact, real diff + real free-tier critique, skill).
 
 ## Notes
 - Interlux and Code Studio are SEPARATE apps.

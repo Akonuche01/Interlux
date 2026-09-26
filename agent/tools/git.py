@@ -11,6 +11,14 @@ def _expand(path: str) -> str:
 
 
 async def _git(args: list[str], cwd: str) -> dict:
+    # This git binary is Termux-built with a baked-in system gitconfig path
+    # (/data/data/com.termux/...) that is unreadable here — and fatal when
+    # read. There is no usable system config on this device, so disable it.
+    env = {
+        **os.environ,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+    }
     try:
         proc = await asyncio.create_subprocess_exec(
             "git",
@@ -18,6 +26,7 @@ async def _git(args: list[str], cwd: str) -> dict:
             cwd=_expand(cwd),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
         key = track(proc)
         try:

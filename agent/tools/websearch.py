@@ -14,9 +14,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import urllib.request
-from pathlib import Path
+
+from ..pconfig import config_section
 
 TIMEOUT = 20
 RESULT_CAP = 10
@@ -24,22 +24,7 @@ SNIPPET_CAP = 500
 
 
 def _section() -> dict:
-    try:
-        env = json.loads(os.environ.get("INTERLUX_PROVIDERS", "{}"))
-        if isinstance(env, dict) and isinstance(env.get("web_search"), dict):
-            return env["web_search"]
-    except (json.JSONDecodeError, ValueError):
-        pass
-    try:
-        home = os.environ.get("HOME") or str(Path.home())
-        path = Path(home) / ".interlux/agent/providers.json"
-        if path.exists():
-            cfg = json.loads(path.read_text())
-            if isinstance(cfg, dict) and isinstance(cfg.get("web_search"), dict):
-                return cfg["web_search"]
-    except (OSError, json.JSONDecodeError, ValueError):
-        pass
-    return {}
+    return config_section("web_search")
 
 
 def _post(url: str, body: dict, timeout: int) -> dict:
