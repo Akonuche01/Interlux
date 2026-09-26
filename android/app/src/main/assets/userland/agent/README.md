@@ -31,7 +31,7 @@ python3 -m agent.test_kara
 | Method | Request | Response |
 |---|---|---|
 | `capabilities` | `{"id": 1, "method": "capabilities"}` | `{"result": {"protocol": 1, "methods": [...], "providers": [...], "tools": [...]}}` |
-| `turn` | `{"params": {"user": "...", "provider": "openai"}}` | `{"result": {"turn_id": "..."}}` |
+| `turn` | `{"params": {"user": "...", "provider": "openai"}}` | `{"result": {"turn_id": "..."}}` (+ `usage` when the provider reports it) |
 | `turn` + images | `{"params": {"user": "...", "images": ["<path or data: URL>"]}}` | same, model sees the images |
 | `approve` | `{"params": {"id": "...", "decision": "accept", "scope": "turn"\|"session"}}` | `{"result": true}` |
 | `policy` | `{"params": {}}` or `{"params": {"sandbox": "read-only"}}` or `{"params": {"revoke": "<thread>"\|"*"}}` | `{"result": {"policy": {...}, "path": "...", "revoked": n}}` |
@@ -50,6 +50,7 @@ and `sandbox_root` (workspace confinement root, default `$HOME`).
 Notifications:
 - `approval_request` → `{"id": "...", "params": {"command": "..."}}`
 - `complete` / `error`
+- `usage` → `{"turn_id": "...", "usage": {"prompt_tokens", "completion_tokens", "total_tokens"}}` (when reported)
 
 ## Sandbox & approval scopes (Epic B)
 
@@ -145,6 +146,21 @@ Notifications:
   restart via `mcp {"restart": true}`, stopped on shutdown. Failures
   (bad command, handshake timeout, server exit, stderr tail) are logged
   and visible in the `mcp` RPC — never silent.
+
+## Web search + usage (Epic F)
+
+- `web_search` tool (read-only, no approval): Tavily-compatible endpoint
+  from a `web_search` section of the provider config
+  (`{base_url, api_key, path?, extra?}` — never hardcoded). Without config
+  it returns a clean error, not silence. Returns `{answer, results:
+  [{title, url, snippet}]}`.
+- Token usage: every provider normalizes to
+  `{prompt_tokens, completion_tokens, total_tokens}` — captured from OpenAI
+  stream chunks (`stream_options.include_usage`), Anthropic
+  `message_start`/`message_delta`, Responses `response.completed`, and
+  non-streamed full bodies. Surfaced three ways: live `usage` broadcast,
+  `turn` result field, and the audit record. Never stored in thread
+  history (kept out of model context).
 
 ## Next (P2)
 - PATH/plugin tool registry, pty-attach to live tabs

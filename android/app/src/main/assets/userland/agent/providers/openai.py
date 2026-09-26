@@ -6,7 +6,7 @@ from typing import AsyncIterator
 from .base import BaseProvider
 from .media import openai_blocks
 from .responses import ResponsesUnsupported, post_responses
-from .streaming import openai_chunks, post_sse
+from .streaming import openai_chunks, openai_usage, post_sse
 
 logger = logging.getLogger("providers.openai")
 
@@ -55,10 +55,16 @@ class OpenAIProvider(BaseProvider):
             "temperature": temperature,
             "stream": stream,
         }
+        if stream:
+            # Ask for the terminal usage chunk (servers that do not
+            # understand it ignore it; usage is then simply absent).
+            payload["stream_options"] = {"include_usage": True}
 
         logger.info(f"Connecting to {url}")
         try:
-            async for delta in post_sse(url, headers, payload, openai_chunks):
+            async for delta in post_sse(
+                url, headers, payload, openai_chunks, usage_from=openai_usage
+            ):
                 yield delta
             yield {"type": "complete"}
         except Exception as e:

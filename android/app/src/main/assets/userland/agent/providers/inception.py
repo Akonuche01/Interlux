@@ -52,6 +52,13 @@ class InceptionProvider(BaseProvider):
                     content = data["choices"][0].get("message", {}).get("content", "")
                     if content:
                         yield {"type": "text_delta", "content": content}
+                usage = data.get("usage")
+                if isinstance(usage, dict):
+                    from .streaming import normalize_usage
+                    yield {"type": "usage", "usage": normalize_usage(
+                        usage.get("prompt_tokens"), usage.get("completion_tokens"),
+                        usage.get("total_tokens"),
+                    )}
                 yield {"type": "complete"}
         except Exception as e:
             logger.error(f"Inception API error: {e}")

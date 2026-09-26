@@ -19,8 +19,8 @@
 | 9 | Sessions resume/fork/compact | thread/resume\|fork\|compact + memories (C) | PAR |
 | 10 | Skills (markdown + tools) | markdown skills + catalog + skill_load + skill tool plugins (D) | PAR |
 | 11 | MCP servers (external tools) | stdio client + mcp_<server>__<tool> proxies (E) | PAR |
-| 12 | Web search | none | **GAP** |
-| 13 | Token usage + cost per turn | ignored | **GAP** |
+| 12 | Web search | web_search tool, config-driven, read-only (F) | PAR |
+| 13 | Token usage + cost per turn | normalized usage in result + broadcast + audit (F) | PAR |
 | 14 | Plan mode (read-only loop) | none | **GAP** |
 | 15 | Review flows (diff review) | git_diff exists, no flow | **GAP** |
 | 16 | Streaming deltas | true SSE | PAR |
@@ -111,3 +111,21 @@ Turn params gain `mode` (default `exec`, or `plan`) and `sandbox`
 
 No auto-open URLs (confirm always), no raw sockets/monitor/HID, no silent
 exfiltration. Deny is always available and always honored.
+
+## 6. Kara-migration surface (daemon-side remainders, from 2026-09-26 assessment)
+
+Kara can drive iagent today for chat/turns/approvals/skills/MCP/tools, but its
+drawer/timeline/config need surface we have not built yet. None of it breaks
+`protocol: 1` (all additive):
+
+| # | Need | Status | Home |
+|---|---|---|---|
+| M1 | `thread/list` + `thread/read` (history drawer) | TODO | new Epic (I) |
+| M2 | Item-granular event vocabulary (item begin/end, tool args/results) | TODO (usage ships in F) | Epic F + new Epic (I) |
+| M3 | Provider key management RPC (keys live in our private filesDir; Kara cannot write the file) | TODO | new Epic (I) |
+| M4 | `turn/steer` (mid-turn steering) or explicit wont-do | TODO (decision) | new Epic (I) |
+| M5 | Client-registered tools (`ask_provider` callback) or explicit wont-do | TODO (decision) | new Epic (I) |
+| M6 | Inter-app restart surface (auto-start already exists via TerminalService + BootReceiver; needs APK rebuild) | TODO | app-side |
+
+Resolved by B–E: `thread/resume|fork|compact`, `memories`, `skills` list,
+MCP client (`mcp_<server>__<tool>`), per-turn providers, sandboxes, audit.

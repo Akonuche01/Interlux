@@ -137,6 +137,15 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   path (EXTRA_WRITE: always asks, session-grantable), isError mapped,
   restart/reconcile via mcp RPC + tools_refresh. Device proof 12/12 E2E
   against a stdio echo server (approval, standing grant, error, restart).
+- Epic F SHIPPED: web_search tool (Tavily-compatible, config-driven,
+  read-only so no approval) + token usage accounting (normalized
+  prompt/completion/total from OpenAI stream chunks, Anthropic deltas,
+  Responses completed, and full bodies; surfaced as live broadcast, turn
+  result field, and audit record; never in history). Device proof 6/6 E2E
+  (stub roundtrip, free-tier usage captured streamed, history clean) +
+  regression (llama accepts stream_options, responses fallback, cancel,
+  deny). Noted: TokenHarbor 404s the daemon-default gpt-4o (unknown model
+  on that gateway); explicit deepseek model required.
 
 ## Notes
 - Interlux and Code Studio are SEPARATE apps.

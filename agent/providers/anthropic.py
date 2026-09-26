@@ -5,7 +5,7 @@ from typing import AsyncIterator
 
 from .base import BaseProvider
 from .media import anthropic_blocks
-from .streaming import anthropic_chunks, post_sse
+from .streaming import anthropic_chunks, anthropic_usage, post_sse
 
 logger = logging.getLogger("providers.anthropic")
 
@@ -41,7 +41,10 @@ class AnthropicProvider(BaseProvider):
 
         logger.info(f"Connecting to {url}")
         try:
-            async for delta in post_sse(url, headers, payload, anthropic_chunks):
+            async for delta in post_sse(
+                url, headers, payload, anthropic_chunks,
+                usage_from=anthropic_usage,
+            ):
                 yield delta
             yield {"type": "complete"}
         except Exception as e:

@@ -299,6 +299,14 @@ async def _execute_turn(
     has_error = False
 
     async for delta in stream_turn(provider, messages, model, images, api, stream):
+        if delta.get("type") == "usage" and isinstance(delta.get("usage"), dict):
+            # Epic F: cost visibility. Live broadcast; kept out of output
+            # so it never pollutes history or the model context.
+            turn["usage"] = delta["usage"]
+            await broadcast({
+                "type": "usage", "turn_id": turn["id"], "usage": delta["usage"],
+            })
+            continue
         turn["output"].append(delta)
         if delta.get("type") == "error":
             has_error = True
@@ -319,7 +327,10 @@ async def _execute_turn(
             audit.append({"type": "turn", "thread_id": thread_id, **turn})
         except Exception:
             pass
-        return {"id": payload.get("id"), "result": {"turn_id": turn["id"]}}
+        result = {"turn_id": turn["id"]}
+        if turn.get("usage"):
+            result["usage"] = turn["usage"]
+        return {"id": payload.get("id"), "result": result}
 
     # Parse tool calls from content
     if content:
@@ -358,7 +369,10 @@ async def _execute_turn(
         pass
     await broadcast({"type": "complete", "turn_id": turn["id"]})
 
-    return {"id": payload.get("id"), "result": {"turn_id": turn["id"]}}
+    result = {"turn_id": turn["id"]}
+    if turn.get("usage"):
+        result["usage"] = turn["usage"]
+    return {"id": payload.get("id"), "result": result}
 
 
 async def handle_turn(payload: dict, client_socket) -> dict:
