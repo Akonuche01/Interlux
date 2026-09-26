@@ -141,6 +141,7 @@ Termux-baked shebangs rewritten at extract, and OPENSSL_CONF=/dev/null
     searchable scrollback (done: find + highlight + counter + prev/next,
     unit-tested, screenshot-proven; no auto-scroll yet), split panes (done:
     picker + tap-to-activate + divider, bridge-proven independent I/O),
+    font size control (done: Aa dialog + slider + persisted),
     font/theme packs, URL tap-to-open.
 17. [ ] Safety model for 2026 Android: consent ledger (every scan consented +
     logged), rootless-capability advisor ("needs raw sockets — unavailable

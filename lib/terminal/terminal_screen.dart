@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xterm/xterm.dart';
 
 import 'terminal_search.dart';
@@ -38,6 +39,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
   bool _ctrlHeld = false;
   bool _altHeld = false;
 
+  /// Terminal font size, persisted across launches.
+  static const _fontSizeKey = 'terminal_font_size';
+  double _fontSize = 14;
+
   /// Scrollback search state (per screen, always on the active tab).
   bool _searchOpen = false;
   final TextEditingController _searchField = TextEditingController();
@@ -51,6 +56,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
   void initState() {
     super.initState();
     _targetsStore.load();
+    SharedPreferences.getInstance().then((prefs) {
+      final size = prefs.getDouble(_fontSizeKey);
+      if (size != null && mounted) {
+        setState(() => _fontSize = size.clamp(10.0, 24.0));
+      }
+    });
     _addSession();
     // Onboarding prompts run in sequence so dialogs never stack.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -249,6 +260,23 @@ class _TerminalScreenState extends State<TerminalScreen> {
     }
   }
 
+  Future<void> _changeFontSize(double size) async {
+    final clamped = size.clamp(10.0, 24.0);
+    setState(() => _fontSize = clamped);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_fontSizeKey, clamped);
+  }
+
+  void _openTextSize() {
+    showDialog(
+      context: context,
+      builder: (context) => _TextSizeDialog(
+        size: _fontSize,
+        onChanged: _changeFontSize,
+      ),
+    );
+  }
+
   void _showError(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -287,6 +315,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
               onTargets: _openTargets,
               onShare: _shareActiveReport,
               onSearch: _openSearch,
+              onTextSize: _openTextSize,
             ),
             if (_searchOpen) _SearchBar(
               field: _searchField,
@@ -327,7 +356,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
             searchHitBackgroundCurrent: Color(0xFFFF5E5E),
             searchHitForeground: Color(0xFF000000),
           ),
-          textStyle: const TerminalStyle(fontSize: 14),
+          textStyle: TerminalStyle(fontSize: _fontSize),
           autofocus: true,
           hardwareKeyboardOnly: false,
           simulateScroll: true,
@@ -363,6 +392,7 @@ class _SessionTabBar extends StatelessWidget {
   final VoidCallback onTargets;
   final VoidCallback onShare;
   final VoidCallback onSearch;
+  final VoidCallback onTextSize;
 
   const _SessionTabBar({
     required this.sessions,
@@ -373,6 +403,7 @@ class _SessionTabBar extends StatelessWidget {
     required this.onTargets,
     required this.onShare,
     required this.onSearch,
+    required this.onTextSize,
   });
 
   @override
@@ -488,6 +519,22 @@ class _SessionTabBar extends StatelessWidget {
               ),
             ),
           ),
+          GestureDetector(
+            onTap: onTextSize,
+            child: Container(
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              margin: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: const Color(0xFF232323),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Text(
+                'Aa',
+                style: TextStyle(color: Color(0xFFE6E6E6), fontSize: 14),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -564,6 +611,48 @@ class _SearchBar extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Text-size dialog: slider 10–24sp with live preview, persisted.
+class _TextSizeDialog extends StatelessWidget {
+  final double size;
+  final ValueChanged<double> onChanged;
+
+  const _TextSizeDialog({required this.size, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1A1A1A),
+      title: const Text(
+        'Text size',
+        style: TextStyle(color: Color(0xFFE6E6E6), fontSize: 16),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'interlux:/\$ echo Aa',
+            style: TextStyle(color: const Color(0xFFE6E6E6), fontSize: size),
+          ),
+          Slider(
+            value: size,
+            min: 10,
+            max: 24,
+            divisions: 14,
+            label: size.toStringAsFixed(0),
+            onChanged: onChanged,
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Done'),
+        ),
+      ],
     );
   }
 }
