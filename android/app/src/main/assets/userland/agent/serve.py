@@ -9,6 +9,18 @@ from pathlib import Path
 from typing import AsyncIterator
 
 from .audit import AuditLog
+from .policy import (
+    GRANT_SCOPES,
+    SANDBOX_MODES,
+    allows,
+    load_policy,
+    policy_path,
+    record_grant,
+    resolve_sandbox,
+    revoke,
+    save_policy,
+    sandbox_ctx,
+)
 from .providers import PROVIDERS, BaseProvider
 from .tools import EXTRA_WRITE, TOOLS, approval_label, needs_approval
 from .tools.plugins import scan_plugins
@@ -38,30 +50,60 @@ audit = AuditLog()
 
 class ApprovalManager:
     def __init__(self):
-        self.pending: dict[str, asyncio.Future] = {}
+        # fid -> {"future", "thread", "tool", "label"}
+        self.pending: dict[str, dict] = {}
 
-    def request_approval(self, thread_id: str, params: dict) -> asyncio.Future:
+    def request_approval(
+        self, thread_id: str, params: dict, tool: str = "", label: str = ""
+    ) -> asyncio.Future:
         fid = params["id"]
-        future = asyncio.Future()
-        self.pending[fid] = future
-        return future
+        entry: dict = {
+            "future": asyncio.Future(),
+            "thread": thread_id,
+            "tool": tool,
+            "label": label,
+        }
+        self.pending[fid] = entry
+        return entry["future"]
 
-    def approve(self, fid: str, decision: str) -> bool:
-        if fid in self.pending:
-            granted = str(decision or "").strip().lower() in (
-                "approve", "accept", "allow", "yes", "always", "true",
-            )
-            self.pending[fid].set_result(granted)
-            del self.pending[fid]
-            return True
-        return False
+    def approve(self, fid: str, decision: str, scope: str = "turn") -> bool:
+        entry = self.pending.pop(fid, None)
+        if entry is None:
+            return False
+        granted = str(decision or "").strip().lower() in (
+            "approve", "accept", "allow", "yes", "always", "true",
+        )
+        entry["future"].set_result(granted)
+        if granted and scope == "session" and entry.get("tool"):
+            try:
+                policy = load_policy()
+                what = record_grant(
+                    policy, entry["thread"], entry["tool"], entry.get("label", "")
+                )
+                save_policy(policy)
+                audit.append({
+                    "type": "grant",
+                    "thread_id": entry["thread"],
+                    "tool": entry["tool"],
+                    "granted": what,
+                    "scope": "session",
+                })
+                logger.info(
+                    f"Session grant recorded: {entry['thread']} -> {what!r}"
+                )
+            except Exception:
+                logger.exception("failed to record session grant")
+        return True
 
     def drop_thread(self, thread_id: str) -> int:
         """Cancel pending approvals for a thread (turn cancelled)."""
-        doomed = [fid for fid in self.pending if fid.split(":")[0] == thread_id]
+        doomed = [
+            fid for fid, entry in self.pending.items()
+            if entry.get("thread") == thread_id
+        ]
         for fid in doomed:
             try:
-                self.pending[fid].cancel()
+                self.pending[fid]["future"].cancel()
             except Exception:
                 pass
             del self.pending[fid]
@@ -89,33 +131,57 @@ async def run_tool_loop(turn: dict, client_socket) -> None:
     tool_calls = turn.get("tool_calls", [])
     logger.info(f"Processing {len(tool_calls)} tool call(s)")
 
+    sandbox_mode = turn.get("sandbox", "full") or "full"
+    thread_id = turn.get("thread_id", "default")
+    # Standing grants live on disk and survive turns; load once per loop.
+    policy = load_policy()
+
     for call in tool_calls:
         tool_name = call.get("tool", "shell")
         params = call.get("parameters", {})
         logger.info(f"Tool: {tool_name}, params: {params}")
 
         if needs_approval(tool_name, params):
-            thread_id = turn.get("thread_id", "default")
-            fid = f"{thread_id}:{len(approvals.pending)}"
-            approval_params = {"command": approval_label(tool_name, params), "id": fid}
-
-            approval_future = approvals.request_approval(thread_id, approval_params)
-            logger.info(f"Requesting approval: {fid}")
-            await broadcast({
-                "type": "approval_request",
-                "id": fid,
-                "params": approval_params,
-            })
-
-            logger.info("Waiting for client decision...")
-            granted = await approval_future
-            if not granted:
-                logger.info(f"Denied by client: {fid} — skipping")
-                denied = {"tool": tool_name, "status": "denied", "message": "denied by client"}
-                turn["output"].append(denied)
-                await broadcast({"type": "tool_result", **denied})
+            if sandbox_mode == "read-only":
+                logger.info(f"Blocked by read-only sandbox: {tool_name}")
+                blocked = {
+                    "tool": tool_name,
+                    "status": "error",
+                    "message": f"write tool {tool_name!r} blocked: sandbox is read-only",
+                }
+                turn["output"].append(blocked)
+                await broadcast({"type": "tool_result", **blocked})
                 continue
-            logger.info("Approval received!")
+
+            label = approval_label(tool_name, params)
+            if allows(policy, thread_id, tool_name, label):
+                logger.info(
+                    f"Standing session grant covers {tool_name} ({label!r}) "
+                    f"— skipping approval"
+                )
+            else:
+                fid = f"{thread_id}:{len(approvals.pending)}"
+                approval_params = {"command": label, "id": fid}
+
+                approval_future = approvals.request_approval(
+                    thread_id, approval_params, tool=tool_name, label=label
+                )
+                logger.info(f"Requesting approval: {fid}")
+                await broadcast({
+                    "type": "approval_request",
+                    "id": fid,
+                    "params": approval_params,
+                })
+
+                logger.info("Waiting for client decision...")
+                granted = await approval_future
+                if not granted:
+                    logger.info(f"Denied by client: {fid} — skipping")
+                    denied = {"tool": tool_name, "status": "denied", "message": "denied by client"}
+                    turn["output"].append(denied)
+                    await broadcast({"type": "tool_result", **denied})
+                    continue
+                logger.info("Approval received!")
 
         logger.info(f"Executing tool: {tool_name}")
         if tool_name in TOOLS:
@@ -149,11 +215,17 @@ async def _execute_turn(
 ) -> dict:
     messages = [{"role": "user", "content": user_msg}]
     images = params.get("images") or []
+    api = params.get("api", "chat")
+    if api not in ("chat", "responses"):
+        api = "chat"
+    stream = params.get("stream", True)
+    if not isinstance(stream, bool):
+        stream = True
 
     turn["output"] = []
     has_error = False
 
-    async for delta in stream_turn(provider, messages, model, images):
+    async for delta in stream_turn(provider, messages, model, images, api, stream):
         turn["output"].append(delta)
         if delta.get("type") == "error":
             has_error = True
@@ -220,7 +292,14 @@ async def handle_turn(payload: dict, client_socket) -> dict:
 
     thread_id = params.get("thread_id", f"thread-{len(audit.read_last())}")
     session = Session(thread_id)
-    turn = {"id": f"{thread_id}:{len(session.turns)}", "user": user_msg, "thread_id": thread_id}
+    # Epic B: turn param wins; policy.json default otherwise.
+    sandbox = resolve_sandbox(params, load_policy())
+    turn = {
+        "id": f"{thread_id}:{len(session.turns)}",
+        "user": user_msg,
+        "thread_id": thread_id,
+        "sandbox": sandbox["mode"],
+    }
     session.turns.append(turn)
 
     config = json.loads(os.environ.get("INTERLUX_PROVIDERS", "{}"))
@@ -243,6 +322,7 @@ async def handle_turn(payload: dict, client_socket) -> dict:
 
     RUNNING[turn["id"]] = asyncio.current_task()
     token = turn_ctx.set(thread_id)
+    sandbox_token = sandbox_ctx.set(sandbox)
     try:
         return await _execute_turn(
             payload, params, user_msg, provider, model,
@@ -263,6 +343,7 @@ async def handle_turn(payload: dict, client_socket) -> dict:
         }
     finally:
         RUNNING.pop(turn["id"], None)
+        sandbox_ctx.reset(sandbox_token)
         turn_ctx.reset(token)
 
 
@@ -278,11 +359,17 @@ async def handle_request(payload: dict, client_socket) -> dict:
                 "id": request_id,
                 "result": {
                     "protocol": 1,
-                    "methods": ["turn", "cancel", "capabilities", "approve", "tools_refresh"],
+                    "methods": [
+                        "turn", "cancel", "capabilities", "approve",
+                        "tools_refresh", "policy",
+                    ],
                     "stream": True,
                     "providers": list(PROVIDERS.keys()),
                     "tools": sorted(TOOLS.keys()),
                     "media": ["image"],
+                    "apis": ["chat", "responses"],
+                    "sandboxes": list(SANDBOX_MODES),
+                    "approve_scopes": list(GRANT_SCOPES),
                 },
             }
 
@@ -299,9 +386,30 @@ async def handle_request(payload: dict, client_socket) -> dict:
         if method == "approve":
             fid = params.get("id")
             decision = params.get("decision")
-            if approvals.approve(fid, decision):
+            scope = params.get("scope", "turn")
+            if scope not in GRANT_SCOPES:
+                scope = "turn"
+            if approvals.approve(fid, decision, scope):
                 return {"id": request_id, "result": True}
             return {"id": request_id, "error": {"code": -32602, "message": "unknown fid"}}
+
+        if method == "policy":
+            # Get/set sandbox default + revoke standing grants.
+            policy = load_policy()
+            revoked = None
+            changed = False
+            if params.get("sandbox") in SANDBOX_MODES:
+                policy["sandbox"] = params["sandbox"]
+                changed = True
+            if "revoke" in params:
+                revoked = revoke(policy, str(params["revoke"]))
+                changed = True
+            if changed:
+                save_policy(policy)
+            result = {"policy": policy, "path": str(policy_path())}
+            if revoked is not None:
+                result["revoked"] = revoked
+            return {"id": request_id, "result": result}
 
         if method == "cancel":
             tid = params.get("turn_id") or params.get("id") or ""
@@ -340,6 +448,8 @@ async def stream_turn(
     messages: list[dict],
     model: str,
     images: list[str] | None = None,
+    api: str = "chat",
+    stream: bool = True,
 ) -> AsyncIterator[dict]:
     logger.info(f"stream_turn called with provider={provider}, model={model}")
     if not provider:
@@ -349,7 +459,9 @@ async def stream_turn(
         return
 
     try:
-        async for delta in provider.stream_turn(messages, model=model, images=images):
+        async for delta in provider.stream_turn(
+            messages, model=model, images=images, api=api, stream=stream
+        ):
             yield delta
     except Exception as e:
         yield {"type": "error", "message": str(e)}

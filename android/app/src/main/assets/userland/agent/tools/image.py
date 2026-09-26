@@ -95,6 +95,15 @@ async def image_generate(
         path = str(Path(home) / ".interlux/agent/images" / f"gen-{stamp}.png")
     out = Path(os.path.expandvars(os.path.expanduser(path)))
     try:
+        from ..policy import check_write, sandbox_adjust
+    except ImportError:
+        check_write = lambda _p: None  # noqa: E731
+        sandbox_adjust = lambda p: p  # noqa: E731
+    out = sandbox_adjust(out)
+    blocked = check_write(out)
+    if blocked:
+        return {"status": "error", "message": f"image_generate blocked by sandbox: {blocked}"}
+    try:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(raw)
     except Exception as e:

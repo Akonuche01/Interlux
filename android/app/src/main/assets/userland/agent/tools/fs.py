@@ -3,6 +3,8 @@
 import os
 from pathlib import Path
 
+from ..policy import check_write, sandbox_adjust
+
 
 def _resolve(path: str) -> Path:
     expanded = os.path.expandvars(os.path.expanduser(path))
@@ -46,7 +48,10 @@ async def fs_read(path: str, max_bytes: int = 65536) -> dict:
 async def fs_write(path: str, content: str) -> dict:
     """Write content to a file (creates parents). Requires approval."""
     try:
-        p = _resolve(path)
+        p = sandbox_adjust(_resolve(path))
+        blocked = check_write(p)
+        if blocked:
+            return {"status": "error", "message": f"fs_write blocked by sandbox: {blocked}"}
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
         return {"status": "success", "path": str(p), "bytes": len(content.encode("utf-8"))}
@@ -58,9 +63,12 @@ async def fs_edit(path: str, old: str, new: str) -> dict:
     """Exact-match surgical replace. old must occur exactly once.
     Requires approval. Returns the changed line range."""
     try:
-        p = _resolve(path)
+        p = sandbox_adjust(_resolve(path))
         if not p.is_file():
             return {"status": "error", "message": f"not a file: {path}"}
+        blocked = check_write(p)
+        if blocked:
+            return {"status": "error", "message": f"fs_edit blocked by sandbox: {blocked}"}
         text = p.read_text(encoding="utf-8")
         count = text.count(old)
         if count == 0:
