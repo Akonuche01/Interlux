@@ -518,6 +518,8 @@ object Userland {
               tools)
                 set -e
                 /root/pkginstall.sh install ${'$'}TOOLS
+                # Alpine ships nikto as nikto.pl only; give it its usual name.
+                [ -x /usr/bin/nikto ] || ln -sf nikto.pl /usr/bin/nikto
                 echo "guest tools ready — next: sh /root/pentest.sh verify"
                 ;;
               verify)
@@ -526,6 +528,7 @@ object Userland {
                   case "${'$'}t" in
                     nmap-scripts) [ -d /usr/share/nmap/scripts ] && echo "ok nmap-scripts" || { echo "MISS nmap-scripts"; fail=1; } ;;
                     py3-pip) python3 -m pip --version >/dev/null 2>&1 && echo "ok py3-pip" || { echo "MISS py3-pip"; fail=1; } ;;
+                    bind-tools) have dig && echo "ok bind-tools" || { echo "MISS bind-tools"; fail=1; } ;;
                     *) if have "${'$'}t"; then echo "ok ${'$'}t"; else echo "MISS ${'$'}t"; fail=1; fi ;;
                   esac
                 done
@@ -577,6 +580,11 @@ object Userland {
      * v2.6: provider() uses fixed-string match (sonames carry regex
      * metachars; tokens sit anywhere in p: lines). v2.7: index decompressed
      * once per run (per-lookup gunzip under proot took 20+ min to resolve).
+     * v2.8: follow plain package deps (interpreters like perl were silently
+     * skipped) + best-effort cmd: virtuals; skip pc: and path deps.
+     * v2.9: do_resolve() is a single awk pass over the index (per-lookup
+     * 13MB cat|grep cost ~1s each; deep trees like hydra's 20+ so: deps
+     * took 20+ min). awk resolves plain deps, providers, cmd:, constraints.
      * Run INSIDE the guest: iroot /root/pkginstall.sh install|remove|
      * upgrade|list|dry-run <pkgs...>
      */
@@ -653,18 +661,55 @@ object Userland {
               return 1
             }
             do_resolve() {
-              # $1=pkg -> print closure (deps first, self last), one per line
-              case "${'$'}done_list" in *" ${'$'}1 "*) return 0;; esac
-              done_list="${'$'}done_list${'$'}1 "
-              s=$(stanza "${'$'}1")
-              if [ -z "${'$'}s" ]; then echo "PKGINSTALL: unknown package ${'$'}1" >&2; return 1; fi
-              deps=$(echo "${'$'}s" | ${'$'}BB grep '^D:' | ${'$'}BB tr ' ' '\n' | ${'$'}BB grep '^so:' || true)
-              for d in ${'$'}deps; do
-                p=$(provider "${'$'}d")
-                if [ -z "${'$'}p" ]; then echo "PKGINSTALL: no provider for ${'$'}d (needed by ${'$'}1)" >&2; return 1; fi
-                do_resolve "${'$'}p" || return 1
-              done
-              echo "${'$'}1"
+              # $1=pkg -> print closure (deps first, self last), one per line.
+              # v2.9: single awk pass over the whole index. The old per-lookup
+              # `cat 13MB | grep -B60` cost ~1s each, so deep trees (hydra:
+              # 20+ so: deps) blew past 20 minutes of resolution. Follows plain
+              # package deps, so: providers (last provider wins, matching the
+              # old tail -n1), skips !conflicts / pc: / if: / paths, resolves
+              # cmd: via providers then plain names (warn-only), strips
+              # version constraints. Same contract: deps first, self last;
+              # non-zero exit + stderr message on unknown pkg / missing provider.
+              ${'$'}BB awk -v roots="${'$'}1" '
+                /^P:/ { cur = substr(${'$'}0, 3); seen[cur] = 1 }
+                /^D:/ { if (cur != "") d[cur] = d[cur] " " substr(${'$'}0, 3) }
+                /^p:/ { m = split(substr(${'$'}0, 3), a, " ")
+                        for (i = 1; i <= m; i++) { t = a[i]; sub(/=.*/, "", t); prov[t] = cur } }
+                END { n = split(roots, R, " ")
+                      for (r = 1; r <= n; r++) { if (!visit(R[r])) exit 1 } }
+                function visit(p,   i, m, a, t, q, s) {
+                  if (p in done) return 1
+                  if (!(p in seen)) {
+                    print "PKGINSTALL: unknown package " p > "/dev/stderr"; return 0
+                  }
+                  done[p] = 1
+                  m = split(d[p], a, " ")
+                  for (i = 1; i <= m; i++) {
+                    t = a[i]
+                    if (t == "" || substr(t, 1, 1) == "!") continue
+                    if (substr(t, 1, 3) == "pc:" || substr(t, 1, 3) == "if:" || index(t, "/") > 0) continue
+                    if (substr(t, 1, 3) == "cmd:") {
+                      q = substr(t, 4); sub(/=.*/, "", q)
+                      if (("cmd:" q) in prov) q = prov["cmd:" q]
+                      if (!(q in seen)) {
+                        print "PKGINSTALL: WARN no package for " t " (needed by " p "), continuing" > "/dev/stderr"; continue
+                      }
+                    } else if (substr(t, 1, 3) == "so:") {
+                      s = substr(t, 4); sub(/=.*/, "", s); sub(/[<>=].*/, "", s)
+                      q = prov["so:" s]
+                      if (q == "") {
+                        print "PKGINSTALL: no provider for " t " (needed by " p ")" > "/dev/stderr"; return 0
+                      }
+                    } else {
+                      q = t; sub(/[<>=].*/, "", q)
+                      if (!(q in seen) && (q in prov)) q = prov[q]
+                    }
+                    if (!visit(q)) return 0
+                  }
+                  print p
+                  return 1
+                }
+              ' "${'$'}IDXTXT"
             }
             do_fetch_one() {
               # $1=pkg -> download single package, print apk path

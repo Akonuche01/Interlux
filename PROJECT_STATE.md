@@ -94,6 +94,24 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   shipped; Userland = "full-tools-8"),
   (3c) proot + rootfs, (3d) minimal pkg script over Termux .debs.
 
+## State 2026-09-26 — agent E2E + full pentest suite green
+- Agent modes ALL PASS on-device: R1 chat/stream, R2 responses/stream,
+  R3 chat complete (stream=false), R4 local + api=responses (llama-server
+  :4602 back up — was killed by a stale libc++_shared.so missing
+  _ZNSt6__ndk113__hash_memory; pkg.sh "already installed" skipped the
+  broken file, fixed by remove+install).
+- pkginstall.sh v2.9 (Alpine guest): do_resolve() = one awk pass over the
+  13MB APKINDEX. Old shell resolver did `cat|grep -B60` per lookup (~1s
+  each) — hydra's 20+-dep tree exceeded 20 min. Also follows plain-name
+  deps (perl was silently skipped before), resolves virtual provides
+  (icu-data via p: tokens), skips !conflicts / pc: / if: / path tokens,
+  cmd: via providers-then-names. Same contract: deps first, self last.
+- Pentest TOOLS all green (verify exit=0): hydra 9.6 runs after its 99-pkg
+  dep closure installed; nikto 2.6.0 runs (perl-json + perl-xml-writer —
+  NOT in Alpine's D: line for nikto); bind-tools (dig), john, tcpdump,
+  ffuf, nmap 7.99 + NSE. Third "20+ minute resolution" bug class now
+  tracked in docs/TERMUX_PARITY_PLAN.md item 15.
+
 ## Notes
 - Interlux and Code Studio are SEPARATE apps.
 - gh CLI token is configured; user prefers deepseek models via agentrouter.

@@ -133,14 +133,21 @@ Termux-baked shebangs rewritten at extract, and OPENSSL_CONF=/dev/null
     shareable reports (done) → plus nikto/hydra/ffuf/sqlmap one-tap recipes,
     findings export (markdown/PDF), scan history per target.
     Proven 2026-09-25: nmap 7.99 + 613 NSE scripts, tmux 3.7c, whois live query.
-    PENDING (network-limited, resolver fixed): python3, py3-pip, git, curl,
-    bash, vim, bind-tools, nikto, hydra, ffuf, john, tcpdump; OSINT phase
-    (sherlock, maigret, holehe, h8mail, theHarvester); pwntools attempt with
-    Kara's psutil/PyNaCl patches.
+    ALL TOOLS GREEN 2026-09-26 (pentest.sh verify exit=0, smoke runs each):
+    python3 3.14.7, py3-pip, git 2.54, curl, bash, tmux, bind-tools (dig
+    9.20.27), vim, whois, nikto 2.6.0 (needs perl-json + perl-xml-writer —
+    Alpine's D: line only lists perl/nmap/openssl), hydra 9.6 RUNS (99-pkg
+    dep closure: afpfs-ng, freerdp-libs, samba-libs, mariadb-connector-c,
+    libpq, subversion-libs, mongo-c-driver, libmemcached, apr, libgcrypt,
+    libssh), ffuf, john 1.9-jumbo, tcpdump. pkginstall v2.9: do_resolve is
+    a single awk pass over the index (old per-lookup 13MB cat|grep took
+    ~1s each; hydra's deep tree blew past 20 min).
+    PENDING: OSINT phase (sherlock, maigret, holehe, h8mail, theHarvester);
+    pwntools attempt with Kara's psutil/PyNaCl patches.
 16. [ ] Modern terminal UX Termux never got: tabs (done), extra keys (done),
     searchable scrollback (done: find + highlight + counter + prev/next,
-    unit-tested, screenshot-proven; no auto-scroll yet), split panes (done:
-    picker + tap-to-activate + divider, bridge-proven independent I/O),
+    unit-tested, screenshot-proven; no auto-scroll yet), split panes (REMOVED
+    by request — Interlux stays a pure terminal),
     font size control (done: Aa dialog + slider + persisted),
     URL tap-to-open (done: cell-mapped tap + confirm dialog, http(s) only,
     via DeviceApi; no new deps), font/theme packs.

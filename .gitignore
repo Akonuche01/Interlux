@@ -14,3 +14,7 @@ build/
 __pycache__/
 *.py[cod]
 agent/providers.json
+android/.kotlin/
+android/.gradle/
+android/app/.cxx/
+android/local.properties
