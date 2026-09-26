@@ -177,10 +177,32 @@ async def run_tool_loop(turn: dict, client_socket) -> None:
     # Standing grants live on disk and survive turns; load once per loop.
     policy = load_policy()
 
+    async def complete_item(item_id: str, tool_name: str, status: str) -> None:
+        # Epic I.2: item-granular timeline event for every tool outcome.
+        await broadcast({
+            "type": "item/completed",
+            "item_id": item_id,
+            "turn_id": turn.get("id"),
+            "thread_id": thread_id,
+            "tool": tool_name,
+            "status": status,
+        })
+
+    item_idx = 0
     for call in tool_calls:
         tool_name = call.get("tool", "shell")
         params = call.get("parameters", {})
         logger.info(f"Tool: {tool_name}, params: {params}")
+        item_id = f"{turn.get('id')}:item:{item_idx}"
+        item_idx += 1
+        await broadcast({
+            "type": "item/started",
+            "item_id": item_id,
+            "turn_id": turn.get("id"),
+            "thread_id": thread_id,
+            "tool": tool_name,
+            "label": approval_label(tool_name, params),
+        })
 
         if needs_approval(tool_name, params):
             # Epic G: plan mode blocks writes explicitly, like read-only
@@ -199,6 +221,7 @@ async def run_tool_loop(turn: dict, client_socket) -> None:
                 }
                 turn["output"].append(blocked)
                 await broadcast({"type": "tool_result", **blocked})
+                await complete_item(item_id, tool_name, "blocked")
                 continue
 
             label = approval_label(tool_name, params)
@@ -228,6 +251,7 @@ async def run_tool_loop(turn: dict, client_socket) -> None:
                     denied = {"tool": tool_name, "status": "denied", "message": "denied by client"}
                     turn["output"].append(denied)
                     await broadcast({"type": "tool_result", **denied})
+                    await complete_item(item_id, tool_name, "denied")
                     continue
                 logger.info("Approval received!")
 
@@ -239,16 +263,32 @@ async def run_tool_loop(turn: dict, client_socket) -> None:
                 tool_output = {"tool": tool_name, "result": result}
                 turn["output"].append(tool_output)
                 await broadcast({"type": "tool_result", **tool_output})
+                status = result.get("status", "success") if isinstance(
+                    result, dict) else "success"
+                await complete_item(item_id, tool_name, str(status))
+                if (tool_name in ("fs_write", "fs_edit", "image_generate")
+                        and isinstance(result, dict)
+                        and result.get("status") == "success"
+                        and result.get("path")):
+                    await broadcast({
+                        "type": "fs/changed",
+                        "op": tool_name,
+                        "path": str(result["path"]),
+                        "turn_id": turn.get("id"),
+                        "thread_id": thread_id,
+                    })
             except Exception as e:
                 logger.error(f"Tool execution failed: {e}")
                 tool_output = {"tool": tool_name, "status": "error", "message": str(e)}
                 turn["output"].append(tool_output)
                 await broadcast({"type": "tool_result", **tool_output})
+                await complete_item(item_id, tool_name, "error")
         else:
             logger.error(f"Unknown tool: {tool_name}")
             tool_output = {"tool": tool_name, "status": "error", "message": f"unknown tool: {tool_name}"}
             turn["output"].append(tool_output)
             await broadcast({"type": "tool_result", **tool_output})
+            await complete_item(item_id, tool_name, "error")
 
 
 async def _execute_turn(
@@ -343,7 +383,22 @@ async def _execute_turn(
         audit.append({"type": "turn", "thread_id": thread_id, **turn})
     except Exception:
         pass
-    await broadcast({"type": "complete", "turn_id": turn["id"]})
+    # Epic I.2: one rich terminal event; legacy `complete` kept as alias.
+    tools_run = [
+        o.get("tool") for o in turn["output"]
+        if isinstance(o, dict) and o.get("tool")
+    ]
+    completed = {
+        "type": "turn/completed",
+        "turn_id": turn["id"],
+        "thread_id": thread_id,
+        "mode": turn.get("mode", "exec"),
+        "tools": tools_run,
+    }
+    if turn.get("usage"):
+        completed["usage"] = turn["usage"]
+    await broadcast(completed | {"type": "complete"})
+    await broadcast(completed)
 
     result = {"turn_id": turn["id"]}
     if turn.get("usage"):
@@ -377,6 +432,22 @@ async def handle_turn(payload: dict, client_socket) -> dict:
 
     provider = make_provider(provider_name)
 
+    # Epic I.2: lifecycle vocabulary for rich timelines.
+    is_new_thread = (
+        state["turns"] == 0 and not state.get("history")
+        and not state.get("base")
+    )
+    if is_new_thread:
+        await broadcast({"type": "thread/started", "thread_id": thread_id})
+    await broadcast({
+        "type": "turn/started",
+        "turn_id": turn["id"],
+        "thread_id": thread_id,
+        "mode": mode,
+        "sandbox": sandbox["mode"],
+        "provider": provider_name,
+    })
+
     RUNNING[turn["id"]] = asyncio.current_task()
     token = turn_ctx.set(thread_id)
     sandbox_token = sandbox_ctx.set(sandbox)
@@ -399,6 +470,8 @@ async def handle_turn(payload: dict, client_socket) -> dict:
         except Exception:
             pass
         await broadcast({"type": "cancelled", "turn_id": turn["id"]})
+        await broadcast({"type": "turn/completed", "turn_id": turn["id"],
+                         "thread_id": thread_id, "cancelled": True})
         return {
             "id": payload.get("id"),
             "result": {"turn_id": turn["id"], "cancelled": True},
@@ -444,6 +517,10 @@ async def handle_request(payload: dict, client_socket) -> dict:
             skills_refresh()
             loaded += scan_skill_plugins(TOOLS, EXTRA_WRITE)
             loaded += await mcp_mod.start_all()
+            await broadcast({
+                "type": "skills/changed",
+                "skills": [s["name"] for s in skills_list()],
+            })
             return {
                 "id": request_id,
                 "result": {"loaded": loaded, "tools": sorted(TOOLS.keys())},
@@ -461,6 +538,10 @@ async def handle_request(payload: dict, client_socket) -> dict:
             if params.get("refresh"):
                 skills_refresh()
                 scan_skill_plugins(TOOLS, EXTRA_WRITE)
+                await broadcast({
+                    "type": "skills/changed",
+                    "skills": [s["name"] for s in skills_list()],
+                })
             if params.get("load"):
                 skill = skills_get(str(params["load"]))
                 if skill is None:

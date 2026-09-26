@@ -53,7 +53,16 @@ like read-only but as declared intent).
 
 Notifications:
 - `approval_request` → `{"id": "...", "params": {"command": "..."}}`
-- `complete` / `error`
+- `complete` / `error` (legacy terminal events; `complete` carries
+  `turn_id` + `thread_id` + `tools`)
+- `thread/started` (first turn of a new thread), `turn/started`
+  (`turn_id`, `thread_id`, `mode`, `sandbox`, `provider`), `turn/completed`
+  (`tools` run, `usage`, or `cancelled: true`)
+- `item/started` + `item/completed` per tool call (`item_id`, `tool`,
+  completion `status`: success|error|denied|blocked)
+- `fs/changed` (`op`, `path`) on successful fs_write/fs_edit/image_generate
+- `skills/changed` (current skill names) after skills refresh
+- `mcpServer/started` + `mcpServer/stopped` (`server`, `tools`)
 - `usage` → `{"turn_id": "...", "usage": {"prompt_tokens", "completion_tokens", "total_tokens"}}` (when reported)
 
 ## Sandbox & approval scopes (Epic B)

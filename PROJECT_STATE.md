@@ -156,6 +156,11 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
 - Epic I.1 SHIPPED: thread/list (newest-first summaries with preview for
   history drawers) + thread/read (pure-read tail, never creates state).
   Device proof 9/9 E2E.
+- Epic I.2 SHIPPED: item-level event vocabulary (thread/started,
+  turn/started, item/started+completed with outcome status, enriched
+  complete, turn/completed incl. cancelled, fs/changed, skills/changed,
+  mcpServer started/stopped). Device proof 9/9 E2E (ordering, ids,
+  enrichment, cancel path).
 
 ## Notes
 - Interlux and Code Studio are SEPARATE apps.

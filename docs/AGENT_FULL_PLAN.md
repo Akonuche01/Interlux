@@ -121,7 +121,7 @@ drawer/timeline/config need surface we have not built yet. None of it breaks
 | # | Need | Status | Home |
 |---|---|---|---|
 | M1 | `thread/list` + `thread/read` (history drawer) | SHIPPED (I.1: newest-first summaries + pure-read tail) | new Epic (I) |
-| M2 | Item-granular event vocabulary (item begin/end, tool args/results) | TODO (usage ships in F) | Epic F + new Epic (I) |
+| M2 | Item-granular event vocabulary (item begin/end, tool args/results) | SHIPPED (I.2: thread/turn/item lifecycle, fs/changed, skills/changed, mcpServer/*) | Epic F + new Epic (I) |
 | M3 | Provider key management RPC (keys live in our private filesDir; Kara cannot write the file) | TODO | new Epic (I) |
 | M4 | `turn/steer` (mid-turn steering) or explicit wont-do | TODO (decision) | new Epic (I) |
 | M5 | Client-registered tools (`ask_provider` callback) or explicit wont-do | TODO (decision) | new Epic (I) |

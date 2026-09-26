@@ -20,6 +20,8 @@ import logging
 import os
 from pathlib import Path
 
+from .transport import broadcast
+
 logger = logging.getLogger("mcp")
 
 CONFIG_DIR = Path(
@@ -298,6 +300,10 @@ async def start_all() -> list[str]:
                     _tool_index.pop(key, None)
                     removed_keys.append(key)
             del _servers[name]
+            try:
+                await broadcast({"type": "mcpServer/stopped", "server": name})
+            except Exception:
+                logger.exception(f"mcp[{name}] stopped broadcast failed")
 
     for name, spec in wanted.items():
         if not isinstance(spec, dict) or not spec.get("command"):
@@ -325,6 +331,14 @@ async def start_all() -> list[str]:
                 srv.error = (str(e)[:400] + (f" | stderr: {tail}" if tail else ""))[:500]
                 logger.error(f"mcp[{name}] failed to start: {srv.error}")
                 continue
+            try:
+                await broadcast({
+                    "type": "mcpServer/started",
+                    "server": name,
+                    "tools": [t.get("name", "") for t in srv.tools],
+                })
+            except Exception:
+                logger.exception(f"mcp[{name}] started broadcast failed")
         for t in srv.tools:
             key = _tool_key(name, t["name"])
             if key in _tool_index:
@@ -341,8 +355,12 @@ async def start_all() -> list[str]:
 
 
 async def stop_all() -> None:
-    for srv in list(_servers.values()):
+    for name, srv in list(_servers.items()):
         await srv.stop()
+        try:
+            await broadcast({"type": "mcpServer/stopped", "server": name})
+        except Exception:
+            logger.exception(f"mcp[{name}] stopped broadcast failed")
     _servers.clear()
     _tool_index.clear()
 
