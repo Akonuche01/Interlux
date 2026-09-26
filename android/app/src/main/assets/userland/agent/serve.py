@@ -176,6 +176,56 @@ approvals = ApprovalManager()
 
 RUNNING: dict[str, asyncio.Task] = {}
 
+# Epic P: subagents — background turns on child threads for parallel
+# fan-out. Registry is in-memory (results persist in thread history);
+# a daemon restart ends running subagents (documented, never silent:
+# completed work is already in history + audit).
+_subagents: dict[str, dict] = {}
+_sub_counters: dict[str, int] = {}
+MAX_SUBAGENTS = 8
+SUBAGENT_DEFAULT_ROUNDS = 3
+
+
+def _child_thread(parent: str) -> str:
+    n = _sub_counters.get(parent, 0) + 1
+    while state_path(f"{parent}-sub-{n}").exists():
+        n += 1
+    _sub_counters[parent] = n
+    return f"{parent}-sub-{n}"
+
+
+async def _run_subagent(entry: dict, payload: dict) -> None:
+    """Background turn driver: records outcome, announces completion."""
+    tid = entry["thread_id"]
+    try:
+        res = await handle_turn(payload, None)
+        result = res.get("result", {}) if isinstance(res, dict) else {}
+        if result.get("cancelled"):
+            entry["status"] = "cancelled"
+        else:
+            entry["status"] = "done"
+        entry["result"] = result
+    except asyncio.CancelledError:
+        entry["status"] = "cancelled"
+        raise
+    except Exception as e:
+        logger.exception(f"subagent {tid} failed")
+        entry["status"] = "error"
+        entry["result"] = {"error": str(e)[:500]}
+    finally:
+        entry["task"] = None
+        try:
+            audit.append({"type": "subagent", "action": "completed",
+                          "thread_id": tid, "parent": entry.get("parent"),
+                          "status": entry["status"]})
+        except Exception:
+            pass
+        try:
+            await broadcast({"type": "subagent/completed", "id": tid,
+                             "thread_id": tid, "status": entry["status"]})
+        except Exception:
+            logger.exception(f"subagent {tid} completion broadcast failed")
+
 # Epic I.3 (M5): client-registered tools. The model can call out to a tool
 # the CLIENT implements (e.g. Kara's ask_provider): the daemon sends
 # tool/call to the owning socket and awaits its answer. Ask-first approval
@@ -255,13 +305,14 @@ async def run_tool_loop(turn: dict, client_socket) -> None:
             "status": status,
         })
 
-    item_idx = 0
+    item_idx = turn.get("_item_next", 0)
     for call in tool_calls:
         tool_name = call.get("tool", "shell")
         params = call.get("parameters", {})
         logger.info(f"Tool: {tool_name}, params: {params}")
         item_id = f"{turn.get('id')}:item:{item_idx}"
         item_idx += 1
+        turn["_item_next"] = item_idx
         await broadcast({
             "type": "item/started",
             "item_id": item_id,
@@ -614,6 +665,9 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                         "providers", "turn/steer",
                         "thread/resume", "thread/fork", "thread/compact",
                         "thread/list", "thread/read", "memories",
+                        "subagent/spawn", "subagent/status",
+                        "subagent/result", "subagent/list",
+                        "subagent/cancel",
                     ],
                     "stream": True,
                     "providers": list(PROVIDERS.keys()),
@@ -1060,6 +1114,117 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                  "params": {"user": message, "thread_id": tid, **passthrough}},
                 client_socket,
             )
+
+        if method == "subagent/spawn":
+            # Epic P: fan out a background turn on a child thread. Returns
+            # immediately; poll subagent/status|result or watch broadcasts.
+            parent = str(params.get("thread_id") or "").strip()
+            message = str(params.get("message") or "").strip()
+            if not parent or not message:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602,
+                             "message": "thread_id and message required"},
+                }
+            running = [e for e in _subagents.values()
+                       if e["status"] == "running"]
+            if len(running) >= MAX_SUBAGENTS:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602, "message": (
+                        f"too many running subagents ({MAX_SUBAGENTS})")},
+                }
+            child = _child_thread(parent)
+            if params.get("context") == "fork":
+                try:
+                    fork_state(parent, child)
+                except FileNotFoundError as e:
+                    return {
+                        "id": request_id,
+                        "error": {"code": -32602, "message": str(e)},
+                    }
+            turn_params = {"user": message, "thread_id": child}
+            for key in ("provider", "model", "sandbox", "sandbox_root",
+                        "mode", "api", "stream", "images", "skills",
+                        "max_rounds"):
+                if key in params:
+                    turn_params[key] = params[key]
+            turn_params.setdefault("max_rounds", SUBAGENT_DEFAULT_ROUNDS)
+            entry = {"id": child, "parent": parent, "thread_id": child,
+                     "status": "running", "result": None, "task": None}
+            _subagents[child] = entry
+            entry["task"] = asyncio.create_task(_run_subagent(
+                entry, {"id": request_id, "method": "turn",
+                        "params": turn_params}))
+            audit.append({"type": "subagent", "action": "spawn",
+                          "thread_id": child, "parent": parent})
+            return {"id": request_id, "result": {
+                "id": child, "thread_id": child, "parent": parent,
+                "status": "running"}}
+
+        def _subagent_entry(sid: str):
+            entry = _subagents.get(str(sid or ""))
+            if entry is None:
+                return None, {
+                    "id": request_id,
+                    "error": {"code": -32602,
+                             "message": f"unknown subagent: {sid}"},
+                }
+            return entry, None
+
+        if method == "subagent/status":
+            entry, err = _subagent_entry(params.get("id"))
+            if err:
+                return err
+            return {"id": request_id, "result": {
+                "id": entry["id"], "status": entry["status"],
+                "thread_id": entry["thread_id"], "parent": entry["parent"]}}
+
+        if method == "subagent/result":
+            entry, err = _subagent_entry(params.get("id"))
+            if err:
+                return err
+            return {"id": request_id, "result": {
+                "id": entry["id"], "status": entry["status"],
+                "thread_id": entry["thread_id"], "parent": entry["parent"],
+                "result": entry["result"]}}
+
+        if method == "subagent/list":
+            parent = str(params.get("thread_id") or "")
+            return {"id": request_id, "result": {"subagents": [
+                {"id": e["id"], "status": e["status"],
+                 "thread_id": e["thread_id"], "parent": e["parent"]}
+                for e in _subagents.values()
+                if not parent or e["parent"] == parent
+            ]}}
+
+        if method == "subagent/cancel":
+            entry, err = _subagent_entry(params.get("id"))
+            if err:
+                return err
+            if entry["status"] != "running":
+                return {"id": request_id, "result": {
+                    "id": entry["id"], "cancelled": False,
+                    "status": entry["status"]}}
+            child = entry["thread_id"]
+            cancelled = False
+            hit = next((k for k in RUNNING if k.startswith(f"{child}:")),
+                       None)
+            if hit is not None:
+                task = RUNNING[hit]
+                if not task.done():
+                    kill_turn(hit)
+                    approvals.drop_thread(child)
+                    task.cancel()
+                    cancelled = True
+            if not cancelled:
+                task = entry.get("task")
+                if task is not None and not task.done():
+                    task.cancel()
+                    cancelled = True
+            return {"id": request_id, "result": {
+                "id": entry["id"], "cancelled": cancelled,
+                "status": entry["status"]}}
 
         if method == "cancel":
             tid = params.get("turn_id") or params.get("id") or ""

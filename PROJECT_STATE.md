@@ -171,6 +171,11 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   cap 10; rounds in result + audit). Fixed materialize_state persisting
   hollow states (one-shot unknown-thread errors + clean thread/list).
   Device proof 5/5 E2E + full battery green (grants, I.1–I.3, F-reg, G).
+- Epic P SHIPPED: subagents (spawn returns immediately, background turn on
+  <parent>-sub-N, status/result/list/cancel RPCs, fork context, per-thread
+  approvals, unique item ids across rounds, cap 8, subagent/completed
+  broadcasts). Device proof 11/11 E2E (fan-out, isolation, child approval,
+  cancel, broadcasts).
 
 ## Notes
 - Interlux and Code Studio are SEPARATE apps.

@@ -47,6 +47,11 @@ python3 -m agent.test_kara
 | `tools` | `{"id": n, "method": "tools"}` | `{"result": {"tools": [...], "client_tools": [...], "mcp_tools": [...]}}` |
 | `tools/register` | `{"params": {"name": "...", "description": "..."}}` | daemon calls the tool back out over your socket (`tool/call`) |
 | `tools/unregister` | `{"params": {"name": "..."}}` | owner-only removal |
+| `subagent/spawn` | `{"params": {"thread_id": "...", "message": "...", "provider"? , "max_rounds"?, "context"?}}` | `{"result": {"id", "thread_id", "parent", "status": "running"}}` — background turn on a child thread |
+| `subagent/status` | `{"params": {"id": "..."}}` | `{"result": {"id", "status", "thread_id", "parent"}}` |
+| `subagent/result` | `{"params": {"id": "..."}}` | `{"result": {"id", "status", "thread_id", "parent", "result"}}` |
+| `subagent/list` | `{"params": {"thread_id"?: "..."}}` | `{"result": {"subagents": [...]}}` |
+| `subagent/cancel` | `{"params": {"id": "..."}}` | `{"result": {"id", "cancelled", "status"}}` |
 | `memories` | `{"params": {"thread_id": "...", "content": "..."}}` (omit `content` to read) | `{"result": {"thread_id", "memories", "path"}}` |
 | `skills` | `{"params": {}}` or `{"params": {"load": "<name>"}}` or `{"params": {"refresh": true}}` | `{"result": {"skills": [...], "user_dir": "..."}}` or full skill `body` |
 | `mcp` | `{"params": {}}` or `{"params": {"restart": true}}` | `{"result": {"servers": [{"name", "status", "tools", "error"}], "config": "...", "registered_tools": [...]}}` |
@@ -230,6 +235,20 @@ Notifications:
   audited, 30s timeout; dead owners fail loudly and auto-unregister;
   `tools/unregister` is owner-only; `tools` lists the registry split by
   origin (all / client / mcp).
+
+## Subagents (Epic P)
+
+- `subagent/spawn` fans out a background turn on a child thread
+  (`<parent>-sub-N`): returns immediately with the child id; poll
+  `subagent/status`/`result`, filter `subagent/list` by parent, or watch
+  `subagent/completed` broadcasts. Cancel via `subagent/cancel`.
+- Children start fresh (explicit briefing message) or with `context:
+  "fork"` to inherit parent history. Turn params pass through
+  (`provider`, `sandbox`, `mode`, `max_rounds` default 3, ...).
+- Child approvals arrive as normal `approval_request`s under the child
+  thread id; child tool calls emit the standard item events (item ids are
+  unique per turn across rounds). Max 8 running (device memory bound).
+  Registry is in-memory; results persist in thread history + audit.
 
 ## Next (P2)
 - PATH/plugin tool registry, pty-attach to live tabs
