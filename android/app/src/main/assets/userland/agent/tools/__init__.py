@@ -4,7 +4,7 @@ from pathlib import Path
 
 from .shell import run_shell
 from .exec import exec_tool
-from .fs import fs_list, fs_read, fs_write
+from .fs import fs_edit, fs_glob, fs_list, fs_read, fs_search, fs_write
 from .git import git_status, git_log, git_diff
 from .pkg import pkg, READ_ACTIONS as PKG_READ_ACTIONS
 from .pty_run import pty_run
@@ -18,6 +18,9 @@ TOOLS = {
     "fs_list": fs_list,
     "fs_read": fs_read,
     "fs_write": fs_write,
+    "fs_edit": fs_edit,
+    "fs_search": fs_search,
+    "fs_glob": fs_glob,
     "git_status": git_status,
     "git_log": git_log,
     "git_diff": git_diff,
@@ -25,7 +28,7 @@ TOOLS = {
     "tabs": tabs,
 }
 
-WRITE_TOOLS = {"shell", "exec", "pty_run", "fs_write"}
+WRITE_TOOLS = {"shell", "exec", "pty_run", "fs_write", "fs_edit"}
 
 EXTRA_WRITE: set[str] = set()
 
