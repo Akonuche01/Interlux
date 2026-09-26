@@ -13,7 +13,11 @@ class BaseProvider(ABC):
 
     @abstractmethod
     async def stream_turn(
-        self, messages: list[dict], temperature: float = 0.7, model: str = ""
+        self,
+        messages: list[dict],
+        temperature: float = 0.7,
+        model: str = "",
+        images: list[str] | None = None,
     ) -> AsyncIterator[dict]:
-        """Yield delta events."""
+        """Yield delta events. images: file paths or data: URLs."""
         ...

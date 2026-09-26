@@ -148,11 +148,12 @@ async def _execute_turn(
     client_socket,
 ) -> dict:
     messages = [{"role": "user", "content": user_msg}]
+    images = params.get("images") or []
 
     turn["output"] = []
     has_error = False
 
-    async for delta in stream_turn(provider, messages, model):
+    async for delta in stream_turn(provider, messages, model, images):
         turn["output"].append(delta)
         if delta.get("type") == "error":
             has_error = True
@@ -224,12 +225,20 @@ async def handle_turn(payload: dict, client_socket) -> dict:
 
     config = json.loads(os.environ.get("INTERLUX_PROVIDERS", "{}"))
     if not config:
-        try:
-            config_file = Path(__file__).parent / "providers.json"
-            if config_file.exists():
-                config = json.loads(config_file.read_text())
-        except Exception:
-            pass
+        # Wipe-proof home config first (survives userland re-extracts),
+        # bundled agent/providers.json as fallback.
+        home = os.environ.get("HOME") or str(Path.home())
+        candidates = [
+            Path(home) / ".interlux/agent/providers.json",
+            Path(__file__).parent / "providers.json",
+        ]
+        for config_file in candidates:
+            try:
+                if config_file.exists():
+                    config = json.loads(config_file.read_text())
+                    break
+            except Exception:
+                pass
     provider = load_provider(provider_name, config.get(provider_name, {}))
 
     RUNNING[turn["id"]] = asyncio.current_task()
@@ -273,6 +282,7 @@ async def handle_request(payload: dict, client_socket) -> dict:
                     "stream": True,
                     "providers": list(PROVIDERS.keys()),
                     "tools": sorted(TOOLS.keys()),
+                    "media": ["image"],
                 },
             }
 
@@ -326,7 +336,10 @@ async def handle_request(payload: dict, client_socket) -> dict:
 
 
 async def stream_turn(
-    provider: BaseProvider | None, messages: list[dict], model: str
+    provider: BaseProvider | None,
+    messages: list[dict],
+    model: str,
+    images: list[str] | None = None,
 ) -> AsyncIterator[dict]:
     logger.info(f"stream_turn called with provider={provider}, model={model}")
     if not provider:
@@ -336,7 +349,7 @@ async def stream_turn(
         return
 
     try:
-        async for delta in provider.stream_turn(messages, model=model):
+        async for delta in provider.stream_turn(messages, model=model, images=images):
             yield delta
     except Exception as e:
         yield {"type": "error", "message": str(e)}

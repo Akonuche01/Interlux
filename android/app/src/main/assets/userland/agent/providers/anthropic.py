@@ -4,6 +4,7 @@ import logging
 from typing import AsyncIterator
 
 from .base import BaseProvider
+from .media import anthropic_blocks
 from .streaming import anthropic_chunks, post_sse
 
 logger = logging.getLogger("providers.anthropic")
@@ -11,7 +12,11 @@ logger = logging.getLogger("providers.anthropic")
 
 class AnthropicProvider(BaseProvider):
     async def stream_turn(
-        self, messages: list[dict], temperature: float = 0.7, model: str = ""
+        self,
+        messages: list[dict],
+        temperature: float = 0.7,
+        model: str = "",
+        images: list[str] | None = None,
     ) -> AsyncIterator[dict]:
         url = f"{self.base_url or 'https://api.anthropic.com/v1'}/messages"
         headers = {
@@ -19,9 +24,12 @@ class AnthropicProvider(BaseProvider):
             "Content-Type": "application/json",
             "anthropic-version": "2023-06-01",
         }
+        text = messages[-1].get("content", "") if messages else ""
+        if not isinstance(text, str):
+            text = ""
         payload = {
             "model": model or "claude-3-5-sonnet-20241022",
-            "messages": messages,
+            "messages": anthropic_blocks(text, images or []),
             "temperature": temperature,
             "max_tokens": 4096,
             "stream": True,

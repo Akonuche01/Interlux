@@ -10,11 +10,15 @@ class TokenHarborProvider(OpenAIProvider):
     DEFAULT_MODEL = "deepseek-v4-flash:free"
 
     async def stream_turn(
-        self, messages: list[dict], temperature: float = 0.7, model: str = ""
+        self,
+        messages: list[dict],
+        temperature: float = 0.7,
+        model: str = "",
+        images: list[str] | None = None,
     ) -> AsyncIterator[dict]:
         if not self.base_url:
             self.base_url = self.DEFAULT_BASE
         async for delta in super().stream_turn(
-            messages, temperature, model or self.DEFAULT_MODEL
+            messages, temperature, model or self.DEFAULT_MODEL, images
         ):
             yield delta

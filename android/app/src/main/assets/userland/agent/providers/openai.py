@@ -4,6 +4,7 @@ import logging
 from typing import AsyncIterator
 
 from .base import BaseProvider
+from .media import openai_blocks
 from .streaming import openai_chunks, post_sse
 
 logger = logging.getLogger("providers.openai")
@@ -11,16 +12,23 @@ logger = logging.getLogger("providers.openai")
 
 class OpenAIProvider(BaseProvider):
     async def stream_turn(
-        self, messages: list[dict], temperature: float = 0.7, model: str = ""
+        self,
+        messages: list[dict],
+        temperature: float = 0.7,
+        model: str = "",
+        images: list[str] | None = None,
     ) -> AsyncIterator[dict]:
         url = f"{self.base_url or 'https://api.openai.com/v1'}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        text = messages[-1].get("content", "") if messages else ""
+        if not isinstance(text, str):
+            text = ""
         payload = {
             "model": model or "gpt-4o",
-            "messages": messages,
+            "messages": openai_blocks(text, images or []),
             "temperature": temperature,
             "stream": True,
         }

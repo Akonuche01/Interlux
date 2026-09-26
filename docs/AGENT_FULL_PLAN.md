@@ -72,6 +72,12 @@
 - Turn-level `mode: "plan"` (write tools hidden, like sandbox read-only but
   explicit). `review` recipe: git_diff → model critique → structured findings.
 
+### Epic H — Multimodal input (done)
+- Turn params accept `images` (file paths or `data:` URLs); per-provider
+  content blocks (OpenAI + Anthropic shapes); `media: ["image"]` advertised
+  in capabilities. Proven on-device: phone screenshot → free-tier vision
+  model answered correctly through the full turn flow.
+
 ## 3. Where Codex falls short (Interlux upgrades, not parity)
 
 1. **On-device everything**: loopback daemon + local SLM. No cloud round-trip,

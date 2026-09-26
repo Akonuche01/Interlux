@@ -7,23 +7,31 @@ import ssl
 from typing import AsyncIterator
 
 from .base import BaseProvider
+from .media import openai_blocks
 
 logger = logging.getLogger("providers.inception")
 
 
 class InceptionProvider(BaseProvider):
     async def stream_turn(
-        self, messages: list[dict], temperature: float = 0.7, model: str = ""
+        self,
+        messages: list[dict],
+        temperature: float = 0.7,
+        model: str = "",
+        images: list[str] | None = None,
     ) -> AsyncIterator[dict]:
         url = f"{self.base_url or 'https://api.inceptionlabs.ai/v1'}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        text = messages[-1].get("content", "") if messages else ""
+        if not isinstance(text, str):
+            text = ""
         payload = {
             "model": model or "mercury-2.5",
             "reasoning_effort": "low",
-            "messages": messages,
+            "messages": openai_blocks(text, images or []),
             "temperature": temperature,
             "stream": False,
         }
