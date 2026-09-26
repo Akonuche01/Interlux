@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import AsyncIterator
 
 from .audit import AuditLog
+from . import mcp as mcp_mod
 from .policy import (
     GRANT_SCOPES,
     SANDBOX_MODES,
@@ -58,6 +59,33 @@ scan_plugins(PLUGIN_DIR, TOOLS, EXTRA_WRITE)
 register_skill_tool(TOOLS)
 skills_refresh()
 scan_skill_plugins(TOOLS, EXTRA_WRITE)
+
+
+# Epic E: MCP proxy tools join the same registry (approval + audit via
+# EXTRA_WRITE: every MCP call asks first, session-grantable like the rest).
+def _mcp_register(add: list[str], remove: list[str]) -> list[str]:
+    for key in remove:
+        TOOLS.pop(key, None)
+        EXTRA_WRITE.discard(key)
+    added = []
+    for key in add:
+        if key in TOOLS:
+            continue
+
+        async def _proxy(_key: str = key, **kwargs):
+            return await mcp_mod.call(_key, kwargs)
+
+        TOOLS[key] = _proxy
+        EXTRA_WRITE.add(key)
+        added.append(key)
+    if added:
+        logger.info(f"mcp tools registered: {added}")
+    if remove:
+        logger.info(f"mcp tools removed: {remove}")
+    return added
+
+
+mcp_mod.set_registration_hook(_mcp_register)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -400,7 +428,7 @@ async def handle_request(payload: dict, client_socket) -> dict:
                     "protocol": 1,
                     "methods": [
                         "turn", "cancel", "capabilities", "approve",
-                        "tools_refresh", "policy", "skills",
+                        "tools_refresh", "policy", "skills", "mcp",
                         "thread/resume", "thread/fork", "thread/compact",
                         "memories",
                     ],
@@ -415,14 +443,22 @@ async def handle_request(payload: dict, client_socket) -> dict:
             }
 
         if method == "tools_refresh":
-            # Plugins AND skills (new skill files + their tool dirs).
+            # Plugins, skills (incl. their tool dirs), AND MCP servers.
             loaded = scan_plugins(PLUGIN_DIR, TOOLS, EXTRA_WRITE)
             skills_refresh()
             loaded += scan_skill_plugins(TOOLS, EXTRA_WRITE)
+            loaded += await mcp_mod.start_all()
             return {
                 "id": request_id,
                 "result": {"loaded": loaded, "tools": sorted(TOOLS.keys())},
             }
+
+        if method == "mcp":
+            # Server status; {"restart": true} tears down and re-spawns all.
+            if params.get("restart"):
+                await mcp_mod.stop_all()
+                await mcp_mod.start_all()
+            return {"id": request_id, "result": mcp_mod.describe()}
 
         if method == "skills":
             # List loaded skills, or load one body; refresh re-reads disk.
@@ -702,9 +738,22 @@ def main() -> int:
 
     logger.info(f"Starting iagent on port {args.port}")
 
-    transport = Transport(handle_request, args.port)
+    async def _run() -> None:
+        try:
+            # Epic E: spawn configured MCP servers before accepting requests.
+            started = await mcp_mod.start_all()
+            if started:
+                logger.info(f"MCP tools ready: {started}")
+            transport = Transport(handle_request, args.port)
+            await transport.start()
+        finally:
+            try:
+                await mcp_mod.stop_all()
+            except Exception:
+                logger.exception("mcp shutdown failed")
+
     try:
-        asyncio.run(transport.start())
+        asyncio.run(_run())
     except KeyboardInterrupt:
         logger.info("Shutting down")
         return 0

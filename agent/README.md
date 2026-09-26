@@ -10,6 +10,7 @@
 | `policy.py` | Epic B: sandbox modes + standing grants (`~/.interlux/agent/policy.json`, wipe-proof) |
 | `threads.py` | Epic C: thread history/base/notes (`~/.interlux/agent/threads/*.json`, atomic writes, audit replay) |
 | `skills.py` | Epic D: markdown skills (bundled `agent/skills/` + user `~/.interlux/agent/skills/`, catalog + `skill_load` tool) |
+| `mcp.py` | Epic E: stdio MCP client — spawns servers from `~/.interlux/agent/mcp.json`, proxies tools as `mcp_<server>__<tool>` |
 | `providers/` | OpenAI + Anthropic + Inception + Token Harbor + local (llama-server) adapters (stdlib `urllib`, no extra deps; `model` flows per-turn) |
 | `tools/` | shell/exec/pty/fs/git/pkg/tabs/image_generate + registry |
 | `plugins/` | Drop-in `*.py` tools (auto-load at boot, `tools_refresh` hot-loads) |
@@ -41,6 +42,7 @@ python3 -m agent.test_kara
 | `thread/compact` | `{"params": {"thread_id": "...", "provider": "...", "model": "..."}}` | `{"result": {"thread_id", "summary", "turns_before", "path"}}` |
 | `memories` | `{"params": {"thread_id": "...", "content": "..."}}` (omit `content` to read) | `{"result": {"thread_id", "memories", "path"}}` |
 | `skills` | `{"params": {}}` or `{"params": {"load": "<name>"}}` or `{"params": {"refresh": true}}` | `{"result": {"skills": [...], "user_dir": "..."}}` or full skill `body` |
+| `mcp` | `{"params": {}}` or `{"params": {"restart": true}}` | `{"result": {"servers": [{"name", "status", "tools", "error"}], "config": "...", "registered_tools": [...]}}` |
 
 Turn params also take `sandbox` (`full` default | `workspace` | `read-only`)
 and `sandbox_root` (workspace confinement root, default `$HOME`).
@@ -120,6 +122,29 @@ Notifications:
 - Skill tool plugins: `tools_dir` in front-matter points at a directory of
   `*.py` files loaded through the same `scan_plugins` machinery as drop-in
   plugins — same approval (`WRITE_TOOLS`), `EXTRA_WRITE`, and audit path.
+
+## MCP servers (Epic E)
+
+- Config at `~/.interlux/agent/mcp.json` (wipe-proof, optional):
+
+  ```json
+  {"servers": {"echo": {"command": ["python3", "-u", "server.py"],
+                         "env": {}, "cwd": "..."}}}
+  ```
+
+- Transport is newline-delimited JSON-RPC 2.0 over stdio; handshake is
+  `initialize` → `notifications/initialized` → `tools/list` (each side
+  tolerates the other: unparseable stdout lines ignored, `ping` answered,
+  unknown server requests refused).
+- Server tools register as `mcp_<server>__<tool>` through the same
+  registry/approval/audit path as native tools: they land in `EXTRA_WRITE`
+  (always ask first, session-grantable), tool errors (`isError`) surface as
+  `status: error`, results fold into thread history.
+- Lifecycle: spawned at daemon boot, reconciled on every `tools_refresh`
+  (new/restarted servers registered, removed ones unregistered), full
+  restart via `mcp {"restart": true}`, stopped on shutdown. Failures
+  (bad command, handshake timeout, server exit, stderr tail) are logged
+  and visible in the `mcp` RPC — never silent.
 
 ## Next (P2)
 - PATH/plugin tool registry, pty-attach to live tabs

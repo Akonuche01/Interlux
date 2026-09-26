@@ -126,6 +126,17 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   injected as system msg via memories RPC. State at
   ~/.interlux/agent/threads/*.json (atomic writes, slug-safe paths).
   Device proof 25/25 E2E + full regression green.
+- Epic D SHIPPED (commit 8d5578c): markdown skills - bundled agent/skills/
+  + wipe-proof ~/.interlux/agent/skills/ (user wins collisions), per-turn
+  catalog + body injection (params.skills list or "all"), read-only
+  skill_load tool, skills RPC (list/load/refresh), skill tool plugins via
+  tools_dir + scan_plugins. Device proof 14/14 E2E (incl. user skill +
+  plugin registered live) + full regression green.
+- Epic E SHIPPED: MCP client - spawns stdio servers from mcp.json at boot,
+  tools proxied as mcp_<server>__<tool> through the same approval/audit
+  path (EXTRA_WRITE: always asks, session-grantable), isError mapped,
+  restart/reconcile via mcp RPC + tools_refresh. Device proof 12/12 E2E
+  against a stdio echo server (approval, standing grant, error, restart).
 
 ## Notes
 - Interlux and Code Studio are SEPARATE apps.
