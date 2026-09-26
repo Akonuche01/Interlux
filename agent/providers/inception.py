@@ -19,6 +19,8 @@ class InceptionProvider(BaseProvider):
         temperature: float = 0.7,
         model: str = "",
         images: list[str] | None = None,
+        api: str = "chat",
+        stream: bool = False,
     ) -> AsyncIterator[dict]:
         url = f"{self.base_url or 'https://api.inceptionlabs.ai/v1'}/chat/completions"
         headers = {
@@ -33,7 +35,7 @@ class InceptionProvider(BaseProvider):
             "reasoning_effort": "low",
             "messages": openai_blocks(text, images or []),
             "temperature": temperature,
-            "stream": False,
+            "stream": stream,
         }
 
         logger.info(f"Connecting to {url}")

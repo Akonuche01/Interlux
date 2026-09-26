@@ -11,12 +11,16 @@ logger = logging.getLogger("providers.anthropic")
 
 
 class AnthropicProvider(BaseProvider):
+    # Anthropic Messages IS the respond-style API; api= is accepted for a
+    # uniform interface and ignored.
     async def stream_turn(
         self,
         messages: list[dict],
         temperature: float = 0.7,
         model: str = "",
         images: list[str] | None = None,
+        api: str = "chat",
+        stream: bool = True,
     ) -> AsyncIterator[dict]:
         url = f"{self.base_url or 'https://api.anthropic.com/v1'}/messages"
         headers = {
@@ -32,7 +36,7 @@ class AnthropicProvider(BaseProvider):
             "messages": anthropic_blocks(text, images or []),
             "temperature": temperature,
             "max_tokens": 4096,
-            "stream": True,
+            "stream": stream,
         }
 
         logger.info(f"Connecting to {url}")

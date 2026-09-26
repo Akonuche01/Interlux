@@ -18,6 +18,9 @@ class BaseProvider(ABC):
         temperature: float = 0.7,
         model: str = "",
         images: list[str] | None = None,
+        api: str = "chat",
+        stream: bool = True,
     ) -> AsyncIterator[dict]:
-        """Yield delta events. images: file paths or data: URLs."""
+        """Yield delta events. images: file paths or data: URLs.
+        api: "chat" or "responses". stream: live deltas or one shot."""
         ...

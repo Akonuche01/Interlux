@@ -149,11 +149,17 @@ async def _execute_turn(
 ) -> dict:
     messages = [{"role": "user", "content": user_msg}]
     images = params.get("images") or []
+    api = params.get("api", "chat")
+    if api not in ("chat", "responses"):
+        api = "chat"
+    stream = params.get("stream", True)
+    if not isinstance(stream, bool):
+        stream = True
 
     turn["output"] = []
     has_error = False
 
-    async for delta in stream_turn(provider, messages, model, images):
+    async for delta in stream_turn(provider, messages, model, images, api, stream):
         turn["output"].append(delta)
         if delta.get("type") == "error":
             has_error = True
@@ -283,6 +289,7 @@ async def handle_request(payload: dict, client_socket) -> dict:
                     "providers": list(PROVIDERS.keys()),
                     "tools": sorted(TOOLS.keys()),
                     "media": ["image"],
+                    "apis": ["chat", "responses"],
                 },
             }
 
@@ -340,6 +347,8 @@ async def stream_turn(
     messages: list[dict],
     model: str,
     images: list[str] | None = None,
+    api: str = "chat",
+    stream: bool = True,
 ) -> AsyncIterator[dict]:
     logger.info(f"stream_turn called with provider={provider}, model={model}")
     if not provider:
@@ -349,7 +358,9 @@ async def stream_turn(
         return
 
     try:
-        async for delta in provider.stream_turn(messages, model=model, images=images):
+        async for delta in provider.stream_turn(
+            messages, model=model, images=images, api=api, stream=stream
+        ):
             yield delta
     except Exception as e:
         yield {"type": "error", "message": str(e)}

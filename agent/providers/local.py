@@ -15,6 +15,8 @@ class LocalProvider(OpenAIProvider):
         temperature: float = 0.7,
         model: str = "",
         images: list[str] | None = None,
+        api: str = "chat",
+        stream: bool = True,
     ) -> AsyncIterator[dict]:
         if not self.base_url:
             self.base_url = self.DEFAULT_BASE
@@ -22,6 +24,7 @@ class LocalProvider(OpenAIProvider):
         if not self.api_key:
             self.api_key = "local"
         async for delta in super().stream_turn(
-            messages, temperature, model or self.DEFAULT_MODEL, images
+            messages, temperature, model or self.DEFAULT_MODEL,
+            images, api, stream,
         ):
             yield delta
