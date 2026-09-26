@@ -13,6 +13,10 @@
 
 Remaining parity gaps: X11/GUI, Perl-module/Ruby-gem depth, Termux:API
 shell-CLI bindings (bridge itself done).
+Honesty note 2026-09-26: Phase 2's 3/3 covers solver/index/signatures as
+specified — but `apt` UX parity and language breadth were never in those
+three items and are genuinely behind (see item 19). Par means everything
+Termux runs; by that bar packages+languages are BEHIND, not par.
 Ahead of Termux already: Kali-rootless guest + manager, attested targets
 with consent ledger, shareable reports, AI-agent scaffolding (API + audit
 shape), 16KB-first binaries, sshd manager.
@@ -87,6 +91,10 @@ Evidence = boot-log line, screenshot, or `flutter test` — never "should work".
     (+clang 21/llvm/ndk-sysroot closure). Crown proof: compiled + ran a
     Go hello-world ON the phone. Next runtime candidates (unverified):
     rust (125MB+clang), openjdk.
+    CORRECTION 2026-09-26 (device re-audit: userland/bin has node+python
+    only; guest has python3.14+pip and perl only; no ruby/php/go/java/
+    rust anywhere): the runtime set present TODAY is python + node +
+    perl(guest). Ruby/PHP/Go are not installed — moved to item 19.
 9. [x] sshd server flow (host keys, password auth, `sshd` on 8022) + SFTP.
     Proven 2026-09-24 on-device: guest Alpine openssh (key auth, root),
     live exec + SFTP file get, managed by `ssh-host.sh start|stop|status`.
@@ -157,6 +165,18 @@ Termux-baked shebangs rewritten at extract, and OPENSSL_CONF=/dev/null
     with signed deltas.
 18. [ ] Performance: 16KB-first binaries (done), lazy userland modules
     (download node/python only if used), cold-start budget < 3s to prompt.
+19. [ ] apt-compatible UX + language breadth (par = everything Termux runs).
+    No apt/dpkg/pkg in bin/ (pkg.sh + pkginstall.sh exist but speak their
+    own verbs) — needs an `apt` verb shim (update/install/remove/list/
+    show/upgrade/search). Languages present 2026-09-26: python + node
+    (userland), python + perl (guest). Missing: ruby, php, go, java,
+    rust, gcc.
+    PROVEN 2026-09-26 (same audit): Needle 3 runs natively — Cactus
+    android-arm64 binary (1.2MB) + needle3.cact (35MB) in
+    ~/needle[/3.cact], tool call set_light(room=kitchen) correct at
+    301 prefill / 124 decode tok/s, 75MB peak RAM. (pip-installed
+    cactus-needle 3.0.5 works too, but its JAX runner and musl engine
+    wheel are absent — the native binary is the path.)
 
 ## Explicit non-goals (no root, no lies)
 

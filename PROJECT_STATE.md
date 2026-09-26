@@ -180,6 +180,15 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   session stickiness, header auth, loud 401/refused reporting; OAuth
   explicitly deferred app-side). Device proof 5/5 E2E against a local HTTP
   stub (both transports live, approval, restart) + grants/J regression.
+- Honesty audit 2026-09-26 (boss: par = everything Termux runs): NO apt/
+  dpkg/pkg in bin/ (user typed apt -> not found); userland has node+python
+  only; guest has python3.14+pip and perl only; ruby/php/go/java/rust/gcc
+  absent everywhere (item 8's runtime claim corrected in-plan; gap tracked
+  as new item 19: apt verb shim + language breadth).
+- Needle 3 PROVEN on-device: pip cactus-needle 3.0.5 installs+imports in
+  guest, but JAX runner + musl engine wheel absent — the working path is
+  the android-arm64 native binary (~/needle, 1.2MB) + needle3.cact (35MB):
+  set_light(room=kitchen) correct, 301/124 tok/s, 75MB peak RAM.
 
 ## Notes
 - Interlux and Code Studio are SEPARATE apps.
