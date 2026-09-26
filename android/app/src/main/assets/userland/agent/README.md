@@ -31,7 +31,7 @@ python3 -m agent.test_kara
 | Method | Request | Response |
 |---|---|---|
 | `capabilities` | `{"id": 1, "method": "capabilities"}` | `{"result": {"protocol": 1, "methods": [...], "providers": [...], "tools": [...]}}` |
-| `turn` | `{"params": {"user": "...", "provider": "openai"}}` | `{"result": {"turn_id": "..."}}` (+ `usage` when the provider reports it) |
+| `turn` | `{"params": {"user": "...", "provider": "openai"}}` | `{"result": {"turn_id": "..."}}` (+ `usage` when the provider reports it, `rounds` always) |
 | `turn` + images | `{"params": {"user": "...", "images": ["<path or data: URL>"]}}` | same, model sees the images |
 | `approve` | `{"params": {"id": "...", "decision": "accept", "scope": "turn"\|"session"}}` | `{"result": true}` |
 | `policy` | `{"params": {}}` or `{"params": {"sandbox": "read-only"}}` or `{"params": {"revoke": "<thread>"\|"*"}}` | `{"result": {"policy": {...}, "path": "...", "revoked": n}}` |
@@ -54,7 +54,9 @@ python3 -m agent.test_kara
 Turn params also take `sandbox` (`full` default | `workspace` | `read-only`)
 and `sandbox_root` (workspace confinement root, default `$HOME`), plus
 `mode` (`exec` default | `plan` — plan blocks write tools pre-approval,
-like read-only but as declared intent).
+like read-only but as declared intent), plus `max_rounds` (default 1 —
+single provider call as always; higher runs the bounded agentic loop,
+model sees tool results and continues, hard-capped at 10).
 
 Notifications:
 - `approval_request` → `{"id": "...", "params": {"command": "..."}}`
@@ -199,6 +201,18 @@ Notifications:
 - Device note: the userland git is Termux-built with a bogus baked-in
   system gitconfig path — `tools/git.py` disables it (`GIT_CONFIG_NOSYSTEM`
   + `GIT_CONFIG_SYSTEM=/dev/null`) for every git subprocess.
+
+## Autonomous turn loop (Epic J)
+
+- `max_rounds` per turn (default 1 = legacy single-pass). With N > 1 the
+  daemon re-invokes the provider after each tool round, folding the round's
+  model text + tool outcomes into the next round's context (`[assistant
+  round N]: ...` + tool lines), until a tool-free answer or the cap (10).
+- Approvals, sandbox/plan gates, usage capture, item events, and history
+  all operate per round; history/audit record the whole turn once with
+  `rounds` counted. Cancellation settles between rounds via the normal
+  path. Empty "new" thread states are never persisted (keeps "unknown
+  thread" errors repeatable and `thread/list` free of hollow entries).
 
 ## Provider keys, steering, client tools (Epic I.3)
 

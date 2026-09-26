@@ -44,6 +44,7 @@ from .skills import (
 )
 from .threads import (
     build_messages,
+    fold_output,
     fork_state,
     list_threads,
     load_state,
@@ -366,8 +367,8 @@ async def _execute_turn(
     thread_id: str,
     turn: dict,
     client_socket,
-    messages: list[dict],
     state: dict,
+    extra_system: list[dict],
 ) -> dict:
     images = params.get("images") or []
     api = params.get("api", "chat")
@@ -378,66 +379,102 @@ async def _execute_turn(
         stream = True
 
     turn["output"] = []
-    has_error = False
+    turn["rounds"] = 0
+    # Epic J: bounded agentic loop. max_rounds=1 (default) is today's exact
+    # behavior; higher lets the model see tool results and continue.
+    try:
+        max_rounds = int(params.get("max_rounds", 1) or 1)
+    except (TypeError, ValueError):
+        max_rounds = 1
+    max_rounds = max(1, min(max_rounds, 10))
 
-    async for delta in stream_turn(provider, messages, model, images, api, stream):
-        if delta.get("type") == "usage" and isinstance(delta.get("usage"), dict):
-            # Epic F: cost visibility. Live broadcast; kept out of output
-            # so it never pollutes history or the model context.
-            turn["usage"] = delta["usage"]
-            await broadcast({
-                "type": "usage", "turn_id": turn["id"], "usage": delta["usage"],
-            })
-            continue
-        turn["output"].append(delta)
-        if delta.get("type") == "error":
-            has_error = True
-        await _send_delta(delta)
+    working_content = user_msg
+    while True:
+        turn["rounds"] += 1
+        rnd = turn["rounds"]
+        round_messages = build_messages(state, thread_id, working_content,
+                                          extra_system)
+        has_error = False
+        round_text_parts: list[str] = []
 
-    # Parse tool calls from provider response
-    content = ""
-    for item in turn["output"]:
-        if item.get("type") == "text_delta":
-            content += item.get("content", "")
+        async for delta in stream_turn(provider, round_messages, model,
+                                       images, api, stream):
+            if delta.get("type") == "usage" and isinstance(delta.get("usage"), dict):
+                # Epic F: cost visibility. Live broadcast; kept out of output
+                # so it never pollutes history or the model context.
+                turn["usage"] = delta["usage"]
+                await broadcast({
+                    "type": "usage", "turn_id": turn["id"],
+                    "usage": delta["usage"],
+                })
+                continue
+            turn["output"].append(delta)
+            if delta.get("type") == "text_delta":
+                round_text_parts.append(delta.get("content", ""))
+            if delta.get("type") == "error":
+                has_error = True
+            await _send_delta(delta)
 
-    if content:
-        logger.info(f"Content from provider: {content[:200]}")
+        # This round's model text (history/context folding happens below).
+        round_text = "".join(round_text_parts)
+        if round_text:
+            logger.info(f"Round {rnd} content: {round_text[:200]}")
 
-    if has_error:
-        turn["complete"] = True
-        try:
-            audit.append({"type": "turn", "thread_id": thread_id, **turn})
-        except Exception:
-            pass
-        result = {"turn_id": turn["id"]}
-        if turn.get("usage"):
-            result["usage"] = turn["usage"]
-        return {"id": payload.get("id"), "result": result}
-
-    # Parse tool calls from content
-    if content:
-        import re
-        # Look for JSON blocks like ```json {...} ```
-        json_blocks = re.findall(r'```json\s*(.*?)\s*```', content, re.DOTALL)
-        if json_blocks:
+        if has_error:
+            turn["complete"] = True
             try:
-                tool_calls = json.loads(json_blocks[0])
-                if isinstance(tool_calls, list):
-                    turn["tool_calls"] = tool_calls
-                elif "tool_calls" in tool_calls:
-                    turn["tool_calls"] = tool_calls["tool_calls"]
-            except json.JSONDecodeError:
+                audit.append({"type": "turn", "thread_id": thread_id, **turn})
+            except Exception:
                 pass
+            result = {"turn_id": turn["id"], "rounds": turn["rounds"]}
+            if turn.get("usage"):
+                result["usage"] = turn["usage"]
+            return {"id": payload.get("id"), "result": result}
 
-    # Fallback: Generate tool call from user message if it starts with "run "
-    if not turn.get("tool_calls") and user_msg.strip().lower().startswith("run "):
-        command = user_msg.strip()[4:].strip()
-        turn["tool_calls"] = [{
-            "tool": "shell",
-            "parameters": {"command": command}
-        }]
+        # Parse tool calls from this round's content only.
+        tool_calls: list = []
+        if round_text:
+            import re
+            # Look for JSON blocks like ```json {...} ```
+            json_blocks = re.findall(r'```json\s*(.*?)\s*```', round_text, re.DOTALL)
+            if json_blocks:
+                try:
+                    tool_calls = json.loads(json_blocks[0])
+                    if isinstance(tool_calls, list):
+                        pass
+                    elif "tool_calls" in tool_calls:
+                        tool_calls = tool_calls["tool_calls"]
+                    else:
+                        tool_calls = []
+                except json.JSONDecodeError:
+                    tool_calls = []
+                if not isinstance(tool_calls, list):
+                    tool_calls = []
+        turn["tool_calls"] = tool_calls
 
-    await run_tool_loop(turn, client_socket)
+        # Fallback, round 1 only: tool call from a "run " user message.
+        if rnd == 1 and not tool_calls and user_msg.strip().lower().startswith("run "):
+            command = user_msg.strip()[4:].strip()
+            turn["tool_calls"] = [{
+                "tool": "shell",
+                "parameters": {"command": command}
+            }]
+
+        if not turn["tool_calls"]:
+            break  # pure answer — done
+
+        mark = len(turn["output"])
+        await run_tool_loop(turn, client_socket)
+
+        if rnd >= max_rounds:
+            logger.info(f"max_rounds ({max_rounds}) reached — stopping")
+            break
+        # Fold this round (model text + tool outcomes) into next round's
+        # context. Providers stay single-message; the fold carries history.
+        working_content += (
+            f"\n\n[assistant round {rnd}]: {round_text}"
+            + fold_output(turn["output"][mark:])
+        )
 
     turn["complete"] = True
     # Epic C: persist history so later turns / resume see this conversation.
@@ -466,7 +503,7 @@ async def _execute_turn(
     await broadcast(completed | {"type": "complete"})
     await broadcast(completed)
 
-    result = {"turn_id": turn["id"]}
+    result = {"turn_id": turn["id"], "rounds": turn["rounds"]}
     if turn.get("usage"):
         result["usage"] = turn["usage"]
     return {"id": payload.get("id"), "result": result}
@@ -518,14 +555,12 @@ async def handle_turn(payload: dict, client_socket) -> dict:
     token = turn_ctx.set(thread_id)
     sandbox_token = sandbox_ctx.set(sandbox)
     try:
-        # Epic D: skill catalog (+ requested bodies) ride as system messages.
+        # Epic D: skill catalog (+ requested bodies) ride as system messages
+        # inside build_messages, rebuilt every Epic J round.
         return await _execute_turn(
             payload, params, user_msg, provider, model,
-            thread_id, turn, client_socket,
-            build_messages(
-                state, thread_id, user_msg, skill_messages(params.get("skills"))
-            ),
-            state,
+            thread_id, turn, client_socket, state,
+            skill_messages(params.get("skills")),
         )
     except asyncio.CancelledError:
         kill_turn(turn["id"])

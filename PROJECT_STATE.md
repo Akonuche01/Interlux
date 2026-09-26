@@ -166,6 +166,11 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   turn), client-registered tools (tool/call callback over the owner socket,
   ask-first approval, timeouts/dead owners fail loudly + auto-unregister,
   owner-only unregister). Device proof 14/14 E2E.
+- Epic J SHIPPED: autonomous multi-step turn loop (max_rounds per turn,
+  default 1 = legacy; model sees folded tool results and continues; hard
+  cap 10; rounds in result + audit). Fixed materialize_state persisting
+  hollow states (one-shot unknown-thread errors + clean thread/list).
+  Device proof 5/5 E2E + full battery green (grants, I.1–I.3, F-reg, G).
 
 ## Notes
 - Interlux and Code Studio are SEPARATE apps.

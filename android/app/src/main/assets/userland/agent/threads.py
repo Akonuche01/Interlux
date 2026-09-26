@@ -177,7 +177,11 @@ def materialize_state(thread_id: str) -> tuple[dict, str]:
     state = new_state(thread_id)
     state["history"] = history
     state["turns"] = len(history) // 2
-    save_state(state)
+    if history:
+        save_state(state)
+    # Note: empty "new" states are NOT persisted — persisting them would
+    # turn one-shot "unknown thread" errors (steer/fork/compact) into
+    # successes on retry, and clutter thread/list with hollow entries.
     return state, ("audit" if history else "new")
 
 

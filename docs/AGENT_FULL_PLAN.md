@@ -136,7 +136,7 @@ MCP client (`mcp_<server>__<tool>`), per-turn providers, sandboxes, audit.
 | Epic | Scope | Notes |
 |---|---|---|
 | I | Kara surface: `thread/list`+`read`, item events, keys RPC, steer, client tools | daemon-side; §6 M1–M5 |
-| J | Autonomous multi-step turn loop (model↔tools, bounded) | moves both scores |
+| J | Autonomous multi-step turn loop (model↔tools, bounded) | SHIPPED (max_rounds, fold-per-round, cap 10, rounds in result/audit) |
 | K | Terminal tails: Termux:API CLI shims, URL-tap cert, font/theme packs, scrollback auto-scroll, libselinux tidy | app-side, slower loop |
 | L | Pentest depth: OSINT set, pwntools, one-tap recipes, findings export, scan history | guest + app |
 | M | Package depth: Perl/Ruby tail, rust/openjdk, Debian/Kali tarballs, APKINDEX SIGN | guest + userland |
