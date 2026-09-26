@@ -120,7 +120,7 @@ drawer/timeline/config need surface we have not built yet. None of it breaks
 
 | # | Need | Status | Home |
 |---|---|---|---|
-| M1 | `thread/list` + `thread/read` (history drawer) | TODO | new Epic (I) |
+| M1 | `thread/list` + `thread/read` (history drawer) | SHIPPED (I.1: newest-first summaries + pure-read tail) | new Epic (I) |
 | M2 | Item-granular event vocabulary (item begin/end, tool args/results) | TODO (usage ships in F) | Epic F + new Epic (I) |
 | M3 | Provider key management RPC (keys live in our private filesDir; Kara cannot write the file) | TODO | new Epic (I) |
 | M4 | `turn/steer` (mid-turn steering) or explicit wont-do | TODO (decision) | new Epic (I) |
@@ -129,3 +129,16 @@ drawer/timeline/config need surface we have not built yet. None of it breaks
 
 Resolved by B–E: `thread/resume|fork|compact`, `memories`, `skills` list,
 MCP client (`mcp_<server>__<tool>`), per-turn providers, sandboxes, audit.
+
+## 7. Match-everything epics (2026-09-26 directive: every Termux + Codex
+## remainder; split panes stays excluded by standing request)
+
+| Epic | Scope | Notes |
+|---|---|---|
+| I | Kara surface: `thread/list`+`read`, item events, keys RPC, steer, client tools | daemon-side; §6 M1–M5 |
+| J | Autonomous multi-step turn loop (model↔tools, bounded) | moves both scores |
+| K | Terminal tails: Termux:API CLI shims, URL-tap cert, font/theme packs, scrollback auto-scroll, libselinux tidy | app-side, slower loop |
+| L | Pentest depth: OSINT set, pwntools, one-tap recipes, findings export, scan history | guest + app |
+| M | Package depth: Perl/Ruby tail, rust/openjdk, Debian/Kali tarballs, APKINDEX SIGN | guest + userland |
+| N | Perf/distribution: lazy modules, cold-start budget, signed update channel | app-side |
+| O | X11/GUI via guest VNC server + in-app viewer | largest, last |

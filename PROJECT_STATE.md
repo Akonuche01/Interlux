@@ -153,6 +153,9 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   agent/pconfig.py. Fixed userland git's fatal Termux-baked system
   gitconfig path (disabled per-subprocess). Device proof 10/10 E2E (plan
   block, exec flow intact, real diff + real free-tier critique, skill).
+- Epic I.1 SHIPPED: thread/list (newest-first summaries with preview for
+  history drawers) + thread/read (pure-read tail, never creates state).
+  Device proof 9/9 E2E.
 
 ## Notes
 - Interlux and Code Studio are SEPARATE apps.

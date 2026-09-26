@@ -233,3 +233,86 @@ def transcript_text(state: dict) -> str:
     for m in state.get("history", []):
         lines.append(f"{m.get('role', '?')}: {m.get('content', '')}")
     return "\n\n".join(lines)
+
+
+def list_threads(limit: int = 50) -> list[dict]:
+    """Newest-first thread summaries for history drawers.
+
+    Pure read: corrupt files are skipped, never repaired here.
+    """
+    try:
+        limit = max(1, min(int(limit or 50), 500))
+    except (TypeError, ValueError):
+        limit = 50
+    if not THREADS_DIR.is_dir():
+        return []
+    summaries = []
+    for path in sorted(THREADS_DIR.glob("*.json")):
+        if path.suffixes and path.suffix == ".tmp":
+            continue
+        try:
+            state = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(state, dict):
+            continue
+        thread_id = state.get("thread_id") or path.stem
+        history = state.get("history", []) or []
+        preview = ""
+        for m in reversed(history):
+            if isinstance(m, dict) and m.get("role") == "user":
+                preview = str(m.get("content", ""))[:120]
+                break
+        try:
+            mem = memories_path(thread_id)
+            has_mem = mem.exists() and mem.stat().st_size > 0
+        except OSError:
+            has_mem = False
+        summaries.append({
+            "thread_id": thread_id,
+            "turns": state.get("turns", 0),
+            "messages": len(history),
+            "created": state.get("created", ""),
+            "updated": state.get("updated", ""),
+            "parent": state.get("parent"),
+            "has_base": bool(state.get("base")),
+            "has_memories": has_mem,
+            "preview": preview,
+        })
+    summaries.sort(key=lambda s: s.get("updated", ""), reverse=True)
+    return summaries[:limit]
+
+
+def read_thread(thread_id: str, limit: int = 100) -> dict | None:
+    """Pure read of a thread (never creates state, unlike resume).
+
+    Returns the tail of history plus base/memories, or None when the
+    thread exists neither as state nor in the audit trail.
+    """
+    try:
+        limit = max(1, min(int(limit or 100), 2000))
+    except (TypeError, ValueError):
+        limit = 100
+    state = load_state(thread_id)
+    source = "state"
+    if state is None:
+        history = replay_audit(thread_id)
+        if not history:
+            return None
+        state = {
+            "thread_id": thread_id,
+            "turns": len(history) // 2,
+            "base": "",
+            "history": history,
+        }
+        source = "audit"
+    history = state.get("history", []) or []
+    return {
+        "thread_id": thread_id,
+        "source": source,
+        "turns": state.get("turns", 0),
+        "base": state.get("base", ""),
+        "memories": read_memories(thread_id),
+        "messages": history[-limit:],
+        "total": len(history),
+    }

@@ -35,11 +35,13 @@ from .skills import (
 from .threads import (
     build_messages,
     fork_state,
+    list_threads,
     load_state,
     materialize_state,
     memories_path,
     new_state,
     read_memories,
+    read_thread,
     record_turn,
     save_state,
     state_path,
@@ -423,7 +425,7 @@ async def handle_request(payload: dict, client_socket) -> dict:
                         "turn", "cancel", "capabilities", "approve",
                         "tools_refresh", "policy", "skills", "mcp",
                         "thread/resume", "thread/fork", "thread/compact",
-                        "memories",
+                        "thread/list", "thread/read", "memories",
                     ],
                     "stream": True,
                     "providers": list(PROVIDERS.keys()),
@@ -515,8 +517,38 @@ async def handle_request(payload: dict, client_socket) -> dict:
                 result["revoked"] = revoked
             return {"id": request_id, "result": result}
 
-        if method == "thread/resume":
-            # Open a thread: state file first, audit replay fallback,
+        if method == "thread/list":
+            # Newest-first summaries for history drawers. Pure read.
+            try:
+                limit = int(params.get("limit", 50))
+            except (TypeError, ValueError):
+                limit = 50
+            return {
+                "id": request_id,
+                "result": {"threads": list_threads(limit)},
+            }
+
+        if method == "thread/read":
+            # Pure read of one thread (never creates state, unlike resume).
+            tid = str(params.get("thread_id") or "").strip()
+            if not tid:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602, "message": "thread_id required"},
+                }
+            try:
+                limit = int(params.get("limit", 100))
+            except (TypeError, ValueError):
+                limit = 100
+            data = read_thread(tid, limit)
+            if data is None:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602, "message": f"unknown thread: {tid}"},
+                }
+            return {"id": request_id, "result": data}
+
+        if method == "thread/resume":            # Open a thread: state file first, audit replay fallback,
             # brand-new empty thread otherwise (idempotent).
             tid = str(params.get("thread_id") or "").strip()
             if not tid:

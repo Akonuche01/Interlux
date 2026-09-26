@@ -40,6 +40,8 @@ python3 -m agent.test_kara
 | `thread/resume` | `{"params": {"thread_id": "..."}}` | `{"result": {"thread_id", "source": "state"\|"audit"\|"new", "turns", "base", "history", "memories", "path"}}` |
 | `thread/fork` | `{"params": {"thread_id": "...", "to": "optional"}}` | `{"result": {"thread_id", "from", "turns", "history_len", "base", "path"}}` |
 | `thread/compact` | `{"params": {"thread_id": "...", "provider": "...", "model": "..."}}` | `{"result": {"thread_id", "summary", "turns_before", "path"}}` |
+| `thread/list` | `{"params": {"limit": 50}}` | `{"result": {"threads": [{thread_id, turns, messages, created, updated, parent, has_base, has_memories, preview}]}}` (newest first, pure read) |
+| `thread/read` | `{"params": {"thread_id": "...", "limit": 100}}` | `{"result": {"thread_id", "source", "turns", "base", "memories", "messages": tail, "total"}}` (pure read, never creates state) |
 | `memories` | `{"params": {"thread_id": "...", "content": "..."}}` (omit `content` to read) | `{"result": {"thread_id", "memories", "path"}}` |
 | `skills` | `{"params": {}}` or `{"params": {"load": "<name>"}}` or `{"params": {"refresh": true}}` | `{"result": {"skills": [...], "user_dir": "..."}}` or full skill `body` |
 | `mcp` | `{"params": {}}` or `{"params": {"restart": true}}` | `{"result": {"servers": [{"name", "status", "tools", "error"}], "config": "...", "registered_tools": [...]}}` |
