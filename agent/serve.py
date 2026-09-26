@@ -22,6 +22,15 @@ from .policy import (
     sandbox_ctx,
 )
 from .providers import PROVIDERS, BaseProvider
+from .skills import (
+    get_skill as skills_get,
+    list_skills as skills_list,
+    refresh as skills_refresh,
+    register_skill_tool,
+    scan_skill_plugins,
+    skill_messages,
+    USER_DIR as SKILLS_USER_DIR,
+)
 from .threads import (
     build_messages,
     fork_state,
@@ -44,6 +53,11 @@ from .transport import Transport, broadcast
 
 PLUGIN_DIR = Path(__file__).parent / "plugins"
 scan_plugins(PLUGIN_DIR, TOOLS, EXTRA_WRITE)
+
+# Epic D: skills load at boot; skill tool plugins use the same machinery.
+register_skill_tool(TOOLS)
+skills_refresh()
+scan_skill_plugins(TOOLS, EXTRA_WRITE)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -344,10 +358,14 @@ async def handle_turn(payload: dict, client_socket) -> dict:
     token = turn_ctx.set(thread_id)
     sandbox_token = sandbox_ctx.set(sandbox)
     try:
+        # Epic D: skill catalog (+ requested bodies) ride as system messages.
         return await _execute_turn(
             payload, params, user_msg, provider, model,
             thread_id, turn, client_socket,
-            build_messages(state, thread_id, user_msg), state,
+            build_messages(
+                state, thread_id, user_msg, skill_messages(params.get("skills"))
+            ),
+            state,
         )
     except asyncio.CancelledError:
         kill_turn(turn["id"])
@@ -382,7 +400,7 @@ async def handle_request(payload: dict, client_socket) -> dict:
                     "protocol": 1,
                     "methods": [
                         "turn", "cancel", "capabilities", "approve",
-                        "tools_refresh", "policy",
+                        "tools_refresh", "policy", "skills",
                         "thread/resume", "thread/fork", "thread/compact",
                         "memories",
                     ],
@@ -397,10 +415,43 @@ async def handle_request(payload: dict, client_socket) -> dict:
             }
 
         if method == "tools_refresh":
+            # Plugins AND skills (new skill files + their tool dirs).
             loaded = scan_plugins(PLUGIN_DIR, TOOLS, EXTRA_WRITE)
+            skills_refresh()
+            loaded += scan_skill_plugins(TOOLS, EXTRA_WRITE)
             return {
                 "id": request_id,
                 "result": {"loaded": loaded, "tools": sorted(TOOLS.keys())},
+            }
+
+        if method == "skills":
+            # List loaded skills, or load one body; refresh re-reads disk.
+            if params.get("refresh"):
+                skills_refresh()
+                scan_skill_plugins(TOOLS, EXTRA_WRITE)
+            if params.get("load"):
+                skill = skills_get(str(params["load"]))
+                if skill is None:
+                    return {
+                        "id": request_id,
+                        "error": {
+                            "code": -32602,
+                            "message": f"unknown skill: {params['load']}",
+                        },
+                    }
+                return {
+                    "id": request_id,
+                    "result": {
+                        k: skill[k]
+                        for k in ("name", "description", "tools", "body", "path", "source")
+                    },
+                }
+            return {
+                "id": request_id,
+                "result": {
+                    "skills": skills_list(),
+                    "user_dir": str(SKILLS_USER_DIR),
+                },
             }
 
         if method == "turn":

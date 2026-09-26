@@ -14,10 +14,10 @@
 | 4 | File surgically edit (apply_patch) | whole-file fs_write only | **GAP** |
 | 5 | File search (grep/glob) | none | **GAP** |
 | 6 | Per-command approval (allow/deny) | per-call approve/deny | PAR |
-| 7 | Approval scopes (always/session) | per-call only | **GAP** |
-| 8 | Sandbox modes (read-only/workspace/full) | none | **GAP** |
-| 9 | Sessions resume/fork/compact | thread ids only | **GAP** |
-| 10 | Skills (markdown + tools) | plugins (code-only) | **GAP** |
+| 7 | Approval scopes (always/session) | turn/session grants in policy.json (B) | PAR |
+| 8 | Sandbox modes (read-only/workspace/full) | per-turn + policy default, fs gates (B) | PAR |
+| 9 | Sessions resume/fork/compact | thread/resume\|fork\|compact + memories (C) | PAR |
+| 10 | Skills (markdown + tools) | markdown skills + catalog + skill_load + skill tool plugins (D) | PAR |
 | 11 | MCP servers (external tools) | none | **GAP** |
 | 12 | Web search | none | **GAP** |
 | 13 | Token usage + cost per turn | ignored | **GAP** |

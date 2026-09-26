@@ -9,6 +9,7 @@
 | `audit.py` | JSONL transcript |
 | `policy.py` | Epic B: sandbox modes + standing grants (`~/.interlux/agent/policy.json`, wipe-proof) |
 | `threads.py` | Epic C: thread history/base/notes (`~/.interlux/agent/threads/*.json`, atomic writes, audit replay) |
+| `skills.py` | Epic D: markdown skills (bundled `agent/skills/` + user `~/.interlux/agent/skills/`, catalog + `skill_load` tool) |
 | `providers/` | OpenAI + Anthropic + Inception + Token Harbor + local (llama-server) adapters (stdlib `urllib`, no extra deps; `model` flows per-turn) |
 | `tools/` | shell/exec/pty/fs/git/pkg/tabs/image_generate + registry |
 | `plugins/` | Drop-in `*.py` tools (auto-load at boot, `tools_refresh` hot-loads) |
@@ -39,6 +40,7 @@ python3 -m agent.test_kara
 | `thread/fork` | `{"params": {"thread_id": "...", "to": "optional"}}` | `{"result": {"thread_id", "from", "turns", "history_len", "base", "path"}}` |
 | `thread/compact` | `{"params": {"thread_id": "...", "provider": "...", "model": "..."}}` | `{"result": {"thread_id", "summary", "turns_before", "path"}}` |
 | `memories` | `{"params": {"thread_id": "...", "content": "..."}}` (omit `content` to read) | `{"result": {"thread_id", "memories", "path"}}` |
+| `skills` | `{"params": {}}` or `{"params": {"load": "<name>"}}` or `{"params": {"refresh": true}}` | `{"result": {"skills": [...], "user_dir": "..."}}` or full skill `body` |
 
 Turn params also take `sandbox` (`full` default | `workspace` | `read-only`)
 and `sandbox_root` (workspace confinement root, default `$HOME`).
@@ -87,6 +89,37 @@ Notifications:
 - Message order per turn: `base` summary → client notes → history →
   current user message. Turn ids are now `<thread>:<n>` with a real
   per-thread counter (cancel/approval flows unchanged for fresh threads).
+
+## Skills (Epic D)
+
+- Skill files are markdown with front-matter (`name`, `description`,
+  optional `tools` advisory list, optional `tools_dir`):
+
+  ```markdown
+  ---
+  name: alpine-guest
+  description: when to use this (what the model reads)
+  tools: shell
+  tools_dir: tools
+  ---
+  body instructions ...
+  ```
+
+- Two locations: bundled `agent/skills/*.md` (shipped) and user/client
+  `~/.interlux/agent/skills/*.md` (wipe-proof). User skills win name
+  collisions. Bundled examples: `alpine-guest`, `pentest-tools`.
+- Every turn injects a compact **catalog** system message (name +
+  description for each skill). Full bodies are injected when the turn
+  passes `params.skills` (list of names, or `"all"`), after notes and
+  before history.
+- The model can self-serve: the read-only **`skill_load`** tool returns a
+  skill body (no approval, allowed in read-only sandbox); the result folds
+  into thread history like any tool output.
+- `skills` RPC: list summaries, `load` one (returns `body`), or `refresh`
+  to re-read disk. `tools_refresh` also rescans skills.
+- Skill tool plugins: `tools_dir` in front-matter points at a directory of
+  `*.py` files loaded through the same `scan_plugins` machinery as drop-in
+  plugins — same approval (`WRITE_TOOLS`), `EXTRA_WRITE`, and audit path.
 
 ## Next (P2)
 - PATH/plugin tool registry, pty-attach to live tabs

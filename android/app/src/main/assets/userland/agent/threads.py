@@ -101,8 +101,13 @@ def write_memories(thread_id: str, content: str) -> Path:
     return path
 
 
-def build_messages(state: dict, thread_id: str, user_msg: str) -> list[dict]:
-    """base summary -> client notes -> history -> current user message."""
+def build_messages(
+    state: dict,
+    thread_id: str,
+    user_msg: str,
+    extra_system: list[dict] | None = None,
+) -> list[dict]:
+    """base summary -> client notes -> extra system (skills) -> history -> user."""
     msgs: list[dict] = []
     base = state.get("base", "")
     if base:
@@ -116,6 +121,7 @@ def build_messages(state: dict, thread_id: str, user_msg: str) -> list[dict]:
             "role": "system",
             "content": "Client notes for this thread:\n" + mem,
         })
+    msgs.extend(extra_system or [])
     msgs.extend(state.get("history", []))
     msgs.append({"role": "user", "content": user_msg})
     return msgs
@@ -178,7 +184,9 @@ def materialize_state(thread_id: str) -> tuple[dict, str]:
 def fork_state(from_id: str, to_id: str) -> dict:
     """Copy history/base into a new thread (parent recorded)."""
     src, source = materialize_state(from_id)
-    if source == "new":
+    if not src.get("history") and not src.get("base"):
+        # Nothing to fork (fresh/empty thread) — same error whether the
+        # state file exists or not, so retries behave identically.
         raise FileNotFoundError(f"no state or audit history for {from_id!r}")
     dst = new_state(to_id, parent=from_id)
     dst["base"] = src.get("base", "")

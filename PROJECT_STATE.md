@@ -111,6 +111,21 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   NOT in Alpine's D: line for nikto); bind-tools (dig), john, tcpdump,
   ffuf, nmap 7.99 + NSE. Third "20+ minute resolution" bug class now
   tracked in docs/TERMUX_PARITY_PLAN.md item 15.
+- Epic B SHIPPED (commit 3921170): sandbox modes full/workspace/read-only +
+  scoped approval grants (turn/session) in wipe-proof policy.json, policy RPC,
+  fs_write/fs_edit/image_generate write gates. Device proof: 8/8 E2E
+  (read-only blocks pre-approval, turn-scope leaves no grant, session grant
+  recorded, standing grant skips approval, revoke then ask then deny),
+  workspace confinement (inside OK, absolute and .. escape blocked), plus
+  modes/cancel/deny regressions green.
+- Epic C SHIPPED (commit 2e00257): thread sessions - persistent per-thread
+  history injected into every turn (tool output folded into assistant msgs),
+  thread/resume (state | audit replay | new), thread/fork (base+history+notes
+  copied, independent, parent recorded), thread/compact (model summary ->
+  base, history reset, counter kept, audit marker), per-thread memories.md
+  injected as system msg via memories RPC. State at
+  ~/.interlux/agent/threads/*.json (atomic writes, slug-safe paths).
+  Device proof 25/25 E2E + full regression green.
 
 ## Notes
 - Interlux and Code Studio are SEPARATE apps.
