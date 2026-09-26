@@ -4,12 +4,22 @@ import argparse
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 from typing import AsyncIterator
 
 from .audit import AuditLog
 from . import mcp as mcp_mod
-from .pconfig import make_provider
+from .pconfig import (
+    PROVIDER_NAME_RE,
+    config_section,
+    env_pinned,
+    make_provider,
+    provider_config,
+    public_section,
+    read_providers_file,
+    write_providers_file,
+)
 from .policy import (
     GRANT_SCOPES,
     SANDBOX_MODES,
@@ -52,7 +62,7 @@ from .tools import EXTRA_WRITE, TOOLS, approval_label, needs_approval
 from .tools.plugins import scan_plugins
 from .tools.track import current_turn as turn_ctx
 from .tools.track import kill_turn
-from .transport import Transport, broadcast
+from .transport import Transport, broadcast, send_to
 
 PLUGIN_DIR = Path(__file__).parent / "plugins"
 scan_plugins(PLUGIN_DIR, TOOLS, EXTRA_WRITE)
@@ -164,6 +174,62 @@ class ApprovalManager:
 approvals = ApprovalManager()
 
 RUNNING: dict[str, asyncio.Task] = {}
+
+# Epic I.3 (M5): client-registered tools. The model can call out to a tool
+# the CLIENT implements (e.g. Kara's ask_provider): the daemon sends
+# tool/call to the owning socket and awaits its answer. Ask-first approval
+# (EXTRA_WRITE), audit like everything else. Registrations live until
+# unregister/restart, or until the owner proves dead on first use.
+_client_tools: dict[str, dict] = {}
+_tool_call_pending: dict[int, asyncio.Future] = {}
+_tool_call_seq = 0
+CLIENT_TOOL_TIMEOUT = 30.0
+_CLIENT_TOOL_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+
+
+async def _call_client_tool(name: str, arguments: dict) -> dict:
+    """Execute a client tool via its owner socket. Loud on every failure."""
+    global _tool_call_seq
+    entry = _client_tools.get(name)
+    if entry is None:
+        TOOLS.pop(name, None)
+        EXTRA_WRITE.discard(name)
+        return {"status": "error",
+                "message": f"client tool unregistered: {name}"}
+    _tool_call_seq += 1
+    fid = _tool_call_seq
+    fut: asyncio.Future = asyncio.get_running_loop().create_future()
+    _tool_call_pending[fid] = fut
+    try:
+        await send_to(entry["owner"], {
+            "id": fid, "method": "tool/call",
+            "params": {"name": name, "arguments": arguments or {}},
+        })
+    except Exception as e:
+        _client_tools.pop(name, None)
+        TOOLS.pop(name, None)
+        EXTRA_WRITE.discard(name)
+        _tool_call_pending.pop(fid, None)
+        logger.error(f"client tool {name} unreachable ({e}); unregistered")
+        return {"status": "error",
+                "message": f"client tool {name} unreachable: {e}"[:500]}
+    try:
+        res = await asyncio.wait_for(fut, timeout=CLIENT_TOOL_TIMEOUT)
+    except asyncio.TimeoutError:
+        _client_tools.pop(name, None)
+        TOOLS.pop(name, None)
+        EXTRA_WRITE.discard(name)
+        logger.error(f"client tool {name} timed out; unregistered")
+        return {"status": "error",
+                "message": f"client tool {name} timed out (unregistered)"}
+    except Exception as e:
+        # The owner answered with an error: a live tool reporting failure.
+        return {"status": "error", "message": str(e)[:500]}
+    finally:
+        _tool_call_pending.pop(fid, None)
+    if isinstance(res, dict):
+        return res
+    return {"status": "success", "output": res}
 
 
 async def run_tool_loop(turn: dict, client_socket) -> None:
@@ -482,12 +548,24 @@ async def handle_turn(payload: dict, client_socket) -> dict:
         turn_ctx.reset(token)
 
 
-async def handle_request(payload: dict, client_socket) -> dict:
+async def handle_request(payload: dict, client_socket) -> dict | None:
     """Process JSON-RPC request."""
     try:
         method = payload.get("method")
         params = payload.get("params", {})
         request_id = payload.get("id")
+
+        if method is None and ("result" in payload or "error" in payload):
+            # Answer to a daemon-initiated tool/call (M5). Nothing to send
+            # back — transport skips None responses.
+            fut = _tool_call_pending.pop(payload.get("id"), None)
+            if fut is not None and not fut.done():
+                if "error" in payload:
+                    fut.set_exception(
+                        RuntimeError(str(payload["error"])[:500]))
+                else:
+                    fut.set_result(payload.get("result"))
+            return None
 
         if method == "capabilities":
             return {
@@ -496,7 +574,9 @@ async def handle_request(payload: dict, client_socket) -> dict:
                     "protocol": 1,
                     "methods": [
                         "turn", "cancel", "capabilities", "approve",
-                        "tools_refresh", "policy", "skills", "mcp",
+                        "tools_refresh", "tools", "tools/register",
+                        "tools/unregister", "policy", "skills", "mcp",
+                        "providers", "turn/steer",
                         "thread/resume", "thread/fork", "thread/compact",
                         "thread/list", "thread/read", "memories",
                     ],
@@ -597,6 +677,114 @@ async def handle_request(payload: dict, client_socket) -> dict:
             if revoked is not None:
                 result["revoked"] = revoked
             return {"id": request_id, "result": result}
+
+        if method == "providers":
+            # Key management over the wire (M3). Secrets travel inbound
+            # only; reads return masked shapes, the audit never sees a key.
+            name = str(params.get("provider") or "")
+            if "api_key" in params or "base_url" in params or params.get("delete"):
+                if not PROVIDER_NAME_RE.fullmatch(name):
+                    return {
+                        "id": request_id,
+                        "error": {"code": -32602, "message": "bad provider name"},
+                    }
+                if env_pinned():
+                    return {
+                        "id": request_id,
+                        "error": {"code": -32602, "message": (
+                            "config is env-pinned (INTERLUX_PROVIDERS); "
+                            "file write refused")},
+                    }
+                data = read_providers_file()
+                if params.get("delete"):
+                    removed = data.pop(name, None) is not None
+                    if removed:
+                        write_providers_file(data)
+                        audit.append({"type": "provider_config",
+                                      "provider": name, "deleted": True})
+                    return {"id": request_id, "result": {
+                        "provider": name, "deleted": removed}}
+                section = data.setdefault(name, {})
+                if not isinstance(section, dict):
+                    section = data[name] = {}
+                fields = []
+                if "api_key" in params:
+                    section["api_key"] = str(params["api_key"] or "")
+                    fields.append("api_key")
+                if "base_url" in params:
+                    section["base_url"] = str(params["base_url"] or "")
+                    fields.append("base_url")
+                write_providers_file(data)
+                audit.append({"type": "provider_config", "provider": name,
+                              "fields": fields})
+                return {"id": request_id, "result": {
+                    **public_section(name, section), "updated": fields}}
+            if name:
+                return {"id": request_id, "result": public_section(
+                    name, config_section(name))}
+            return {"id": request_id, "result": {"providers": [
+                public_section(n, s) for n, s in sorted(provider_config().items())
+                if isinstance(s, dict)
+            ]}}
+
+        if method == "tools/register":
+            # M5: a client offers a tool the daemon calls back out to.
+            name = str(params.get("name") or "")
+            if not _CLIENT_TOOL_RE.fullmatch(name):
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602, "message": "bad tool name"},
+                }
+            if name in TOOLS and name not in _client_tools:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602,
+                             "message": f"name taken: {name}"},
+                }
+            description = str(params.get("description") or "")[:500]
+            _client_tools[name] = {"description": description,
+                                   "owner": client_socket}
+
+            async def _client_proxy(_name: str = name, **kwargs):
+                return await _call_client_tool(_name, kwargs)
+
+            TOOLS[name] = _client_proxy
+            EXTRA_WRITE.add(name)
+            audit.append({"type": "client_tool", "action": "register",
+                          "name": name})
+            return {"id": request_id, "result": {
+                "name": name, "description": description}}
+
+        if method == "tools/unregister":
+            name = str(params.get("name") or "")
+            entry = _client_tools.get(name)
+            if entry is None:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602,
+                             "message": f"unknown client tool: {name}"},
+                }
+            if entry["owner"] is not client_socket:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602,
+                             "message": "not the owning connection"},
+                }
+            _client_tools.pop(name, None)
+            TOOLS.pop(name, None)
+            EXTRA_WRITE.discard(name)
+            audit.append({"type": "client_tool", "action": "unregister",
+                          "name": name})
+            return {"id": request_id, "result": {"name": name,
+                                                 "deleted": True}}
+
+        if method == "tools":
+            return {"id": request_id, "result": {
+                "tools": sorted(TOOLS.keys()),
+                "client_tools": sorted(_client_tools),
+                "mcp_tools": sorted(
+                    mcp_mod.describe().get("registered_tools", [])),
+            }}
 
         if method == "thread/list":
             # Newest-first summaries for history drawers. Pure read.
@@ -773,6 +961,70 @@ async def handle_request(payload: dict, client_socket) -> dict:
                     "path": str(memories_path(tid)),
                 },
             }
+
+        if method == "turn/steer":
+            # M4: redirect a thread mid-flight. Cancels the running turn
+            # (if any), records the steer message, optionally starts a new
+            # turn carrying it. Turn params may ride along for the new turn.
+            tid = str(params.get("thread_id") or "").strip()
+            message = str(params.get("message") or "").strip()
+            if not tid or not message:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602,
+                             "message": "thread_id and message required"},
+                }
+            start = params.get("start", True)
+            if isinstance(start, str):
+                start = start.lower() not in ("false", "0", "no")
+            else:
+                start = bool(start)
+            cancelled = False
+            prefix = f"{tid}:"
+            hit = next(
+                (key for key in RUNNING if key.startswith(prefix)), None,
+            )
+            if hit is not None:
+                task = RUNNING[hit]
+                if not task.done():
+                    kill_turn(hit)
+                    approvals.drop_thread(tid)
+                    task.cancel()
+                    cancelled = True
+                    try:
+                        await asyncio.wait_for(task, timeout=10)
+                    except (asyncio.CancelledError, asyncio.TimeoutError,
+                            Exception):
+                        pass
+            state, source = materialize_state(tid)
+            if source == "new" and not cancelled:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602,
+                             "message": f"unknown thread: {tid}"},
+                }
+            audit.append({"type": "steer", "thread_id": tid,
+                          "cancelled": cancelled, "started": start,
+                          "message": message[:500]})
+            if not start:
+                state["history"].append({"role": "user", "content": message})
+                save_state(state)
+                return {"id": request_id, "result": {
+                    "thread_id": tid, "cancelled": cancelled,
+                    "started": False,
+                    "history": state["history"][-2:],
+                }}
+            passthrough = {
+                k: params[k] for k in (
+                    "provider", "model", "sandbox", "sandbox_root", "mode",
+                    "api", "stream", "images", "skills",
+                ) if k in params
+            }
+            return await handle_turn(
+                {"id": request_id, "method": "turn",
+                 "params": {"user": message, "thread_id": tid, **passthrough}},
+                client_socket,
+            )
 
         if method == "cancel":
             tid = params.get("turn_id") or params.get("id") or ""

@@ -158,9 +158,14 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   Device proof 9/9 E2E.
 - Epic I.2 SHIPPED: item-level event vocabulary (thread/started,
   turn/started, item/started+completed with outcome status, enriched
-  complete, turn/completed incl. cancelled, fs/changed, skills/changed,
+  complete,   turn/completed incl. cancelled, fs/changed, skills/changed,
   mcpServer started/stopped). Device proof 9/9 E2E (ordering, ids,
   enrichment, cancel path).
+- Epic I.3 SHIPPED: providers RPC (masked get, atomic set/delete, keyless
+  audit, env-pin refusal), turn/steer (cancel + record + optional carrying
+  turn), client-registered tools (tool/call callback over the owner socket,
+  ask-first approval, timeouts/dead owners fail loudly + auto-unregister,
+  owner-only unregister). Device proof 14/14 E2E.
 
 ## Notes
 - Interlux and Code Studio are SEPARATE apps.

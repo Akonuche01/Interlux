@@ -122,9 +122,9 @@ drawer/timeline/config need surface we have not built yet. None of it breaks
 |---|---|---|---|
 | M1 | `thread/list` + `thread/read` (history drawer) | SHIPPED (I.1: newest-first summaries + pure-read tail) | new Epic (I) |
 | M2 | Item-granular event vocabulary (item begin/end, tool args/results) | SHIPPED (I.2: thread/turn/item lifecycle, fs/changed, skills/changed, mcpServer/*) | Epic F + new Epic (I) |
-| M3 | Provider key management RPC (keys live in our private filesDir; Kara cannot write the file) | TODO | new Epic (I) |
-| M4 | `turn/steer` (mid-turn steering) or explicit wont-do | TODO (decision) | new Epic (I) |
-| M5 | Client-registered tools (`ask_provider` callback) or explicit wont-do | TODO (decision) | new Epic (I) |
+| M3 | Provider key management RPC (keys live in our private filesDir; Kara cannot write the file) | SHIPPED (I.3: providers get/set/delete, masked, audited keyless) | new Epic (I) |
+| M4 | `turn/steer` (mid-turn steering) or explicit wont-do | SHIPPED (I.3: cancel + record + optional carrying turn) | new Epic (I) |
+| M5 | Client-registered tools (`ask_provider` callback) or explicit wont-do | SHIPPED (I.3: tools/register, tool/call callback, owner-only unregister) | new Epic (I) |
 | M6 | Inter-app restart surface (auto-start already exists via TerminalService + BootReceiver; needs APK rebuild) | TODO | app-side |
 
 Resolved by B–E: `thread/resume|fork|compact`, `memories`, `skills` list,

@@ -42,6 +42,11 @@ python3 -m agent.test_kara
 | `thread/compact` | `{"params": {"thread_id": "...", "provider": "...", "model": "..."}}` | `{"result": {"thread_id", "summary", "turns_before", "path"}}` |
 | `thread/list` | `{"params": {"limit": 50}}` | `{"result": {"threads": [{thread_id, turns, messages, created, updated, parent, has_base, has_memories, preview}]}}` (newest first, pure read) |
 | `thread/read` | `{"params": {"thread_id": "...", "limit": 100}}` | `{"result": {"thread_id", "source", "turns", "base", "memories", "messages": tail, "total"}}` (pure read, never creates state) |
+| `providers` | `{"params": {"provider": "..."}}` (get, masked) or `{"params": {"provider": "...", "api_key": "...", "base_url": "..."}}` (set) or `{"params": {"provider": "...", "delete": true}}` or `{}` (list all) | `{"result": {"provider", "base_url", "has_key", "key_hint"}}` — secrets inbound only, never on the wire or in audit |
+| `turn/steer` | `{"params": {"thread_id": "...", "message": "...", "start": true}}` (+ optional turn params) | cancels the live turn, records the message, optionally starts a carrying turn |
+| `tools` | `{"id": n, "method": "tools"}` | `{"result": {"tools": [...], "client_tools": [...], "mcp_tools": [...]}}` |
+| `tools/register` | `{"params": {"name": "...", "description": "..."}}` | daemon calls the tool back out over your socket (`tool/call`) |
+| `tools/unregister` | `{"params": {"name": "..."}}` | owner-only removal |
 | `memories` | `{"params": {"thread_id": "...", "content": "..."}}` (omit `content` to read) | `{"result": {"thread_id", "memories", "path"}}` |
 | `skills` | `{"params": {}}` or `{"params": {"load": "<name>"}}` or `{"params": {"refresh": true}}` | `{"result": {"skills": [...], "user_dir": "..."}}` or full skill `body` |
 | `mcp` | `{"params": {}}` or `{"params": {"restart": true}}` | `{"result": {"servers": [{"name", "status", "tools", "error"}], "config": "...", "registered_tools": [...]}}` |
@@ -194,6 +199,23 @@ Notifications:
 - Device note: the userland git is Termux-built with a bogus baked-in
   system gitconfig path — `tools/git.py` disables it (`GIT_CONFIG_NOSYSTEM`
   + `GIT_CONFIG_SYSTEM=/dev/null`) for every git subprocess.
+
+## Provider keys, steering, client tools (Epic I.3)
+
+- `providers` RPC: list sections, get one masked (`base_url`, `has_key`,
+  `key_hint` — never the secret), set `api_key`/`base_url` (atomic write
+  to wipe-proof `providers.json`, audited without secrets), delete a
+  section. Refuses writes while `INTERLUX_PROVIDERS` env-pins the config.
+- `turn/steer`: cancel the thread's live turn (waits for it to settle),
+  record the steer message in history, and either stop (`start: false`)
+  or run a new turn carrying it (turn params pass through). Unknown
+  threads error; steering a live history-less thread works.
+- Client tools: `tools/register` offers a tool the daemon calls back out
+  to over your socket (`{"method": "tool/call", "params": {"name",
+  "arguments"}}` → reply `{"id", "result"}`). Ask-first approval,
+  audited, 30s timeout; dead owners fail loudly and auto-unregister;
+  `tools/unregister` is owner-only; `tools` lists the registry split by
+  origin (all / client / mcp).
 
 ## Next (P2)
 - PATH/plugin tool registry, pty-attach to live tabs

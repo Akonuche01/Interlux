@@ -42,6 +42,10 @@ class Transport:
             payload = json.loads(message)
             logger.info(f"Calling handler with {payload}")
             response = await self.handler(payload, websocket)
+            if response is None:
+                # Handler consumed a frame that needs no reply (e.g. the
+                # client's answer to a daemon-initiated tool/call).
+                return
             logger.info(f"Sending response: {response}")
             async with _lock_for(websocket):
                 await websocket.send(json.dumps(response))
@@ -86,3 +90,9 @@ async def broadcast(payload: dict) -> None:
             logger.info("Broadcast sent")
         except Exception as e:
             logger.exception(f"Failed to send broadcast: {e}")
+
+
+async def send_to(sock, payload: dict) -> None:
+    """Directed send (daemon-initiated requests like tool/call)."""
+    async with _lock_for(sock):
+        await sock.send(json.dumps(payload))
