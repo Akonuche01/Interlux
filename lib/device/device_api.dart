@@ -100,4 +100,15 @@ class DeviceApi {
       return null;
     }
   }
+
+  /// Open an http(s) URL in the system browser. Returns false when refused
+  /// (non-http scheme, unparseable) or no browser handles it.
+  static Future<bool> openUrl(String url) async {
+    try {
+      return await _channel.invokeMethod<bool>('openUrl', {'url': url}) ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
 }

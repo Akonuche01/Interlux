@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xterm/xterm.dart';
 
+import 'terminal_links.dart';
 import 'terminal_search.dart';
 import 'terminal_session.dart';
 import '../pentest/report.dart';
@@ -277,6 +279,54 @@ class _TerminalScreenState extends State<TerminalScreen> {
     );
   }
 
+  /// A tap on a link offers to open it (confirm dialog, never auto-launch).
+  /// Any other tap does nothing here — focus and keyboard stay with the view.
+  void _tapLink(TapUpDetails details, CellOffset at) {
+    final url = findLinkAt(_active.terminal, at);
+    if (url == null || !mounted) return;
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        title: const Text(
+          'Open link?',
+          style: TextStyle(color: Color(0xFFE6E6E6), fontSize: 16),
+        ),
+        content: Text(
+          url,
+          style: const TextStyle(color: Color(0xFF55CDCD), fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: url));
+              Navigator.pop(context);
+            },
+            child: const Text('Copy'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              final ok = await DeviceApi.openUrl(url);
+              if (!ok && context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('No browser found for this link.'),
+                  ),
+                );
+              }
+            },
+            child: const Text('Open'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showError(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -331,6 +381,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
               child: TerminalView(
                 active.terminal,
                 controller: active.controller,
+                onTapUp: (details, at) => _tapLink(details, at),
                 theme: const TerminalTheme(
             cursor: Color(0xFFE6E6E6),
             selection: Color(0x40E6E6E6),

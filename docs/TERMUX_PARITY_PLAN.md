@@ -142,7 +142,8 @@ Termux-baked shebangs rewritten at extract, and OPENSSL_CONF=/dev/null
     unit-tested, screenshot-proven; no auto-scroll yet), split panes (done:
     picker + tap-to-activate + divider, bridge-proven independent I/O),
     font size control (done: Aa dialog + slider + persisted),
-    font/theme packs, URL tap-to-open.
+    URL tap-to-open (done: cell-mapped tap + confirm dialog, http(s) only,
+    via DeviceApi; no new deps), font/theme packs.
 17. [ ] Safety model for 2026 Android: consent ledger (every scan consented +
     logged), rootless-capability advisor ("needs raw sockets — unavailable
     without root" instead of silent failure), Play-independent update channel

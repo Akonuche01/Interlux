@@ -110,7 +110,30 @@ class DeviceApi(
                     result.success(if (ok && out.exists()) out.absolutePath else null)
                 }
             }
+            "openUrl" -> {
+                result.success(openUrl(call.argument<String>("url") ?: ""))
+            }
             else -> result.notImplemented()
+        }
+    }
+
+    /**
+     * Open an http(s) URL in the system browser. Anything else is refused —
+     * callers (link tap) already filter, this is the second gate.
+     */
+    private fun openUrl(url: String): Boolean {
+        return try {
+            val uri = android.net.Uri.parse(url)
+            val scheme = uri.scheme?.lowercase() ?: return false
+            if (scheme != "http" && scheme != "https") return false
+            if (uri.host.isNullOrEmpty()) return false
+            val intent = android.content.Intent(
+                android.content.Intent.ACTION_VIEW, uri
+            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            true
+        } catch (_: Throwable) {
+            false
         }
     }
 
