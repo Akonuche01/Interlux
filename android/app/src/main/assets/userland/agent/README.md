@@ -52,6 +52,7 @@ python3 -m agent.test_kara
 | `thread/unarchive` | `{"params": {"thread_id": "..."}}` | restores (refuses to overwrite live state) |
 | `thread/unsubscribe` | `{"params": {"thread_id": "..."}}` | always true (hygiene no-op) |
 | `thread/name/set` | `{"params": {"thread_id": "...", "name": "..."}}` | names the thread (+ `thread/name/updated` broadcast) |
+| `thread/import` | `{"params": {"thread_id": "...", "messages": [{role, content}], "base"?, "name"?, "mode"?: fail\|overwrite\|append, "source"?}}` | bulk-loads history (migration path, validated + audited) |
 | `model/list` | `{"params": {"provider"?: "..."}}` (omit for all) | `{"result": {"provider", "default", "models": [{id, source}]}}` — config override > live `/models` > curated; never secrets |
 | `subagent/spawn` | `{"params": {"thread_id": "...", "message": "...", "provider"? , "max_rounds"?, "context"?}}` | `{"result": {"id", "thread_id", "parent", "status": "running"}}` — background turn on a child thread |
 | `subagent/status` | `{"params": {"id": "..."}}` | `{"result": {"id", "status", "thread_id", "parent"}}` |

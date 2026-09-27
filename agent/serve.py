@@ -48,6 +48,7 @@ from .threads import (
     build_messages,
     fold_output,
     fork_state,
+    import_history,
     list_threads,
     load_state,
     materialize_state,
@@ -706,7 +707,7 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                         "thread/resume", "thread/fork", "thread/compact",
                         "thread/list", "thread/read", "thread/archive",
                         "thread/unarchive", "thread/unsubscribe",
-                        "thread/name/set", "memories",
+                        "thread/name/set", "thread/import", "memories",
                         "subagent/spawn", "subagent/status",
                         "subagent/result", "subagent/list",
                         "subagent/cancel",
@@ -1015,6 +1016,45 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
         if method == "thread/unsubscribe":
             # Hygiene no-op (like Kara's): nothing server-pushed to stop.
             return {"id": request_id, "result": True}
+
+        if method == "thread/import":
+            # Migration path (Kara move): bulk-load history from another
+            # system, e.g. codex thread/read output. Validated + audited.
+            tid = str(params.get("thread_id") or "").strip()
+            mode = str(params.get("mode", "fail") or "fail").lower()
+            if not tid:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602, "message": "thread_id required"},
+                }
+            if mode not in ("fail", "overwrite", "append"):
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602,
+                             "message": "mode must be fail|overwrite|append"},
+                }
+            try:
+                state = import_history(
+                    tid, params.get("messages"),
+                    base=params.get("base", ""),
+                    name=params.get("name", ""), mode=mode)
+            except FileExistsError as e:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602, "message": str(e)},
+                }
+            except ValueError as e:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602, "message": str(e)},
+                }
+            audit.append({"type": "thread", "action": "import",
+                          "thread_id": tid, "turns": state["turns"],
+                          "mode": mode,
+                          "source": str(params.get("source", "migration"))[:100]})
+            return {"id": request_id, "result": {
+                "thread_id": tid, "turns": state["turns"],
+                "messages": len(state["history"]), "mode": mode}}
 
         if method == "thread/name/set":
             tid = str(params.get("thread_id") or "").strip()

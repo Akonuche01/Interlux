@@ -327,6 +327,56 @@ def read_thread(thread_id: str, limit: int = 100) -> dict | None:
     }
 
 
+IMPORT_ENTRY_CAP = 200000
+IMPORT_MAX_MESSAGES = 5000
+
+
+def import_history(thread_id: str, messages: list, base: str = "",
+                   name: str = "", mode: str = "fail") -> dict:
+    """Bulk-load history (migration path, e.g. Kara's codex threads).
+
+    mode: "fail" (refuse when the thread exists), "overwrite", "append".
+    Entries must be {role: user|assistant, content: str}; oversized content
+    is truncated with a marker. Returns the saved state.
+    """
+    if not isinstance(messages, list) or not messages:
+        raise ValueError("messages must be a non-empty list")
+    if len(messages) > IMPORT_MAX_MESSAGES:
+        raise ValueError(f"too many messages (max {IMPORT_MAX_MESSAGES})")
+    cleaned: list[dict] = []
+    for m in messages:
+        if not isinstance(m, dict) or m.get("role") not in ("user", "assistant"):
+            raise ValueError("each message needs role user|assistant")
+        content = m.get("content", "")
+        if not isinstance(content, str):
+            raise ValueError("message content must be a string")
+        if len(content) > IMPORT_ENTRY_CAP:
+            content = content[:IMPORT_ENTRY_CAP] + "\n...[truncated on import]"
+        cleaned.append({"role": m["role"], "content": content})
+    existing = load_state(thread_id)
+    if existing is not None:
+        if mode == "fail":
+            raise FileExistsError(f"thread exists: {thread_id}")
+        if mode == "append":
+            existing["history"].extend(cleaned)
+            existing["turns"] = int(existing.get("turns", 0)) + len(cleaned) // 2
+            if base:
+                existing["base"] = str(base)[:40000]
+            if name:
+                existing["name"] = str(name)[:200]
+            save_state(existing)
+            return existing
+    state = new_state(thread_id)
+    state["history"] = cleaned
+    state["turns"] = len(cleaned) // 2
+    if base:
+        state["base"] = str(base)[:40000]
+    if name:
+        state["name"] = str(name)[:200]
+    save_state(state)
+    return state
+
+
 def archive_thread(thread_id: str) -> bool:
     """Move state + memories to .archived/ (hidden from list, restorable).
 

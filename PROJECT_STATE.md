@@ -185,6 +185,10 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   authority, enriched approvals (tool+path), thread/compacted + error +
   diff/updated notifications, notifications get no reply. Device proof
   15/15 E2E.
+- thread/import SHIPPED (sessions survive the move): bulk-load validated
+  history (fail/overwrite/append) from e.g. codex thread/read output;
+  imported history reaches providers like native history. Device proof
+  5/5 E2E.
 - Honesty audit 2026-09-26 (boss: par = everything Termux runs): NO apt/
   dpkg/pkg in bin/ (user typed apt -> not found); userland has node+python
   only; guest has python3.14+pip and perl only; ruby/php/go/java/rust/gcc
