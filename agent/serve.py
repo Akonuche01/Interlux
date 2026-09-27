@@ -240,6 +240,31 @@ _tool_call_pending: dict[int, asyncio.Future] = {}
 _tool_call_seq = 0
 CLIENT_TOOL_TIMEOUT = 30.0
 _CLIENT_TOOL_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+# Codex wire name so Kara's existing dispatcher fires unchanged.
+CLIENT_TOOL_CALL_METHOD = "item/tool/call"
+
+
+def _normalize_client_result(res, name: str) -> dict:
+    """Client tool answer -> daemon tool result.
+
+    Understands Codex DynamicToolCallResponse ({contentItems, success})
+    and passes any other dict shape through untouched.
+    """
+    if isinstance(res, dict) and isinstance(res.get("contentItems"), list) \
+            and isinstance(res.get("success"), bool):
+        texts = []
+        for item in res["contentItems"]:
+            if isinstance(item, dict) and item.get("text"):
+                texts.append(str(item["text"]))
+        text = "\n".join(texts) or "(empty tool result)"
+        if res["success"]:
+            return {"status": "success", "tool": name,
+                    "output": text[:20000]}
+        return {"status": "error", "tool": name,
+                "message": text[:4000]}
+    if isinstance(res, dict):
+        return res
+    return {"status": "success", "output": res}
 
 
 async def _call_client_tool(name: str, arguments: dict) -> dict:
@@ -257,8 +282,8 @@ async def _call_client_tool(name: str, arguments: dict) -> dict:
     _tool_call_pending[fid] = fut
     try:
         await send_to(entry["owner"], {
-            "id": fid, "method": "tool/call",
-            "params": {"name": name, "arguments": arguments or {}},
+            "id": fid, "method": CLIENT_TOOL_CALL_METHOD,
+            "params": {"tool": name, "arguments": arguments or {}},
         })
     except Exception as e:
         _client_tools.pop(name, None)
@@ -282,9 +307,7 @@ async def _call_client_tool(name: str, arguments: dict) -> dict:
         return {"status": "error", "message": str(e)[:500]}
     finally:
         _tool_call_pending.pop(fid, None)
-    if isinstance(res, dict):
-        return res
-    return {"status": "success", "output": res}
+    return _normalize_client_result(res, name)
 
 
 def _tool_output_status(output: dict) -> str:
@@ -893,7 +916,11 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                              "message": f"name taken: {name}"},
                 }
             description = str(params.get("description") or "")[:500]
+            spec = params.get("inputSchema")
+            if not isinstance(spec, dict):
+                spec = {"type": "object"}
             _client_tools[name] = {"description": description,
+                                   "inputSchema": spec,
                                    "owner": client_socket}
 
             async def _client_proxy(_name: str = name, **kwargs):
@@ -904,7 +931,8 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
             audit.append({"type": "client_tool", "action": "register",
                           "name": name})
             return {"id": request_id, "result": {
-                "name": name, "description": description}}
+                "name": name, "description": description,
+                "inputSchema": spec}}
 
         if method == "tools/unregister":
             name = str(params.get("name") or "")
@@ -933,6 +961,11 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
             return {"id": request_id, "result": {
                 "tools": sorted(TOOLS.keys()),
                 "client_tools": sorted(_client_tools),
+                "client_specs": {
+                    n: {"description": e.get("description", ""),
+                        "inputSchema": e.get("inputSchema", {})}
+                    for n, e in sorted(_client_tools.items())
+                },
                 "mcp_tools": sorted(
                     mcp_mod.describe().get("registered_tools", [])),
             }}

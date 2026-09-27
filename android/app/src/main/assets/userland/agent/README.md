@@ -252,11 +252,14 @@ Notifications:
   or run a new turn carrying it (turn params pass through). Unknown
   threads error; steering a live history-less thread works.
 - Client tools: `tools/register` offers a tool the daemon calls back out
-  to over your socket (`{"method": "tool/call", "params": {"name",
-  "arguments"}}` → reply `{"id", "result"}`). Ask-first approval,
+  to over your socket (`{"method": "item/tool/call", "params": {"tool",
+  "arguments"}}` — the Codex wire shape, so Kara's dispatcher fires
+  unchanged — → reply `{"id", "result"}` with a `DynamicToolCallResponse`
+  (`{contentItems, success}`) or any dict). Ask-first approval,
   audited, 30s timeout; dead owners fail loudly and auto-unregister;
   `tools/unregister` is owner-only; `tools` lists the registry split by
-  origin (all / client / mcp).
+  origin (all / client+specs / mcp). Registration accepts an optional
+  `inputSchema` passthrough.
 
 ## Subagents (Epic P)
 
