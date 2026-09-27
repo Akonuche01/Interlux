@@ -1,18 +1,20 @@
 # Interlux — Termux parity, then beyond
 
-## Scoreboard (2026-09-24, device-proven only)
+## Scoreboard (2026-09-24 origins, updated 2026-09-27 — device-proven only)
 
 | Phase | Done | Score |
 |---|---|---|
 | 1 — Survival (service, battery, storage, bash) | 4/4 | 100% |
 | 2 — Packages (solver, index, signatures) | 3/3 | 100% |
 | 3 — Ecosystem (runtimes, sshd, distros, APIs, boot, editors) | 6/6 | 100% |
-| 4 — Surpass (agent, suite, UX, safety, perf) | 1.5/5 | ~30% |
+| 4 — Surpass (agent, suite, UX, safety, perf) | 3.4/5 | ~68% |
 | Terminal UX bonus track (tabs, keys, targets, reports) | 4/4 | 100% |
-| **Overall toward strict parity** | | **~78%** |
+| **Overall toward strict parity** | | **~90%** |
 
-Remaining parity gaps: X11/GUI, Perl-module/Ruby-gem depth, Termux:API
-shell-CLI bindings (bridge itself done).
+Remaining parity gaps: X11/GUI, distro breadth (Debian/Kali tarballs),
+Termux:API breadth + shell-CLI bindings, language long-tails (runtimes
+present since 2026-09-27), PDF findings export, signed update channel,
+lazy modules, cold-start budget, font/theme packs, APKINDEX SIGN.
 Honesty note 2026-09-26: Phase 2's 3/3 covers solver/index/signatures as
 specified — but `apt` UX parity and language breadth were never in those
 three items and are genuinely behind (see item 19). Par means everything
@@ -132,10 +134,13 @@ Proven early (2026-09-24): npm 11.20.0 / npx / yarn 1.22.22 run clean
 Termux-baked shebangs rewritten at extract, and OPENSSL_CONF=/dev/null
 (node fatals on the unreadable baked default at first crypto use).
 
-14. [ ] AI agent operator: tool-calling loop over the shell, audit log of every
+14. [x] AI agent operator: tool-calling loop over the shell, audit log of every
     command+output, approve-per-command → approve-per-session, target allowlist,
     offline kill-switch. Model via agentrouter (deepseek), on-device SLM later.
-    **Status:** P1 skeleton done (daemon, WS transport, provider adapters, audit, shell tool + approvals). P2: full provider APIs.
+    DONE 2026-09-26/27: full daemon (Epics B–J, P, Q + model/list) — threads,
+    sandboxes, approvals, skills, MCP stdio+http, subagents, review, plan
+    mode, multi-round loop, usage accounting. Local: llama-server + Qwen +
+    Needle 3 native. Item closed; see docs/AGENT_FULL_PLAN.md.
 15. [ ] Pentest suite built-in: attested targets (done), safe presets (done),
     shareable reports (done) → plus nikto/hydra/ffuf/sqlmap one-tap recipes,
     findings export (markdown/PDF), scan history per target.

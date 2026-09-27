@@ -130,8 +130,24 @@ drawer/timeline/config need surface we have not built yet. None of it breaks
 Resolved by B–E: `thread/resume|fork|compact`, `memories`, `skills` list,
 MCP client (`mcp_<server>__<tool>`), per-turn providers, sandboxes, audit.
 
+## 8. Client ecosystem (browser, video editor, future Kara abilities)
+
+External apps (browser, video editor, …) drive Kara's future abilities
+(documents, games, bots, background video edits) through two supported
+patterns — no new daemon primitives needed:
+
+1. **MCP server (preferred):** the app spawns or serves stdio/HTTP tools;
+   iagent lists, approves, audits, and calls them like native tools.
+   Portable, permission-gated, works for any client.
+2. **Client-registered tools:** Kara implements the tool and answers
+   `tool/call` callbacks (e.g. WebView bridges like `ask_provider`).
+
+Rules: pass paths/commands, never file bytes (video/docs stay in their
+apps); long work goes to subagents so phone screen-time is untouched;
+every external call is approval-gated and audited like the rest.
+
 ## 7. Match-everything epics (2026-09-26 directive: every Termux + Codex
-## remainder; split panes stays excluded by standing request)
+remainder; split panes stays excluded by standing request)
 
 | Epic | Scope | Notes |
 |---|---|---|
@@ -140,7 +156,7 @@ MCP client (`mcp_<server>__<tool>`), per-turn providers, sandboxes, audit.
 | P | Subagents (parallel background turns on child threads) | SHIPPED (spawn/status/result/list/cancel, fork context, per-thread approvals, cap 8) |
 | Q | MCP remote servers (streamable HTTP + header auth) | SHIPPED (JSON/SSE replies, session stickiness, loud failures; OAuth deferred app-side) |
 | K | Terminal tails: Termux:API CLI shims, URL-tap cert, font/theme packs, scrollback auto-scroll, libselinux tidy | apt shim SHIPPED; rest open |
-| L | Pentest depth: OSINT set, pwntools, one-tap recipes, findings export, scan history | guest + app |
+| L | Pentest depth: OSINT set, pwntools, one-tap recipes, findings export, scan history | SHIPPED (sqlmap/sherlock/maigret/holehe/h8mail/theHarvester/pwntools run; recon.sh + FINDINGS.md + history; osint skill; PDF open) |
 | M | Package depth: Perl/Ruby tail, rust/openjdk, Debian/Kali tarballs, APKINDEX SIGN | ruby/php/go/java/rust SHIPPED + proven; tail/tarballs/SIGN open |
 | N | Perf/distribution: lazy modules, cold-start budget, signed update channel | app-side |
 | O | X11/GUI via guest VNC server + in-app viewer | largest, last |
