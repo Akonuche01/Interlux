@@ -17,11 +17,14 @@ Sandbox modes per turn:
                forbidden would be theater).
 
 Grant semantics for approve(scope="session"):
-  command-class tools (shell/exec/pty_run/pkg/tabs) store the exact
-  approval label - "always allow THIS exact command for this thread";
-  everything else (fs_write/fs_edit/image_generate/plugins) stores the
-  tool name - "always allow THIS tool for this thread".
+command-class tools (shell/exec/pty_run/pkg/tabs) store the exact
+approval label - "always allow THIS exact command for this thread";
+everything else (fs_write/fs_edit/image_generate/plugins) stores the
+tool name - "always allow THIS tool for this thread".
 
+Approval mode: policy["approval_mode"] == "never" auto-grants every
+tool call (the owning client's NeverAsk policy). Sandbox/read-only
+and plan-mode blocks still apply first - they forbid, not ask.
 Revocation: policy method with revoke=<thread>|"*".
 """
 
@@ -100,6 +103,12 @@ def record_grant(policy: dict, thread_id: str, tool: str, label: str) -> str:
 
 def allows(policy: dict, thread_id: str, tool: str, label: str) -> bool:
     """True when a standing grant covers this exact call."""
+    if not isinstance(policy, dict):
+        return False
+    # Kara move: her NeverAsk policy auto-answers every approval
+    # client-side on Codex; on iagent the daemon honors it directly.
+    if policy.get("approval_mode") == "never":
+        return True
     entry = policy.get("grants", {}).get(thread_id)
     if not isinstance(entry, dict):
         return False

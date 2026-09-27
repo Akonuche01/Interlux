@@ -37,6 +37,7 @@ from .policy import (
 )
 from .providers import PROVIDERS, BaseProvider
 from .skills import (
+    catalog_message as skills_catalog,
     get_skill as skills_get,
     list_skills as skills_list,
     refresh as skills_refresh,
@@ -421,6 +422,15 @@ def agency_text() -> str:
         mcp_names = []
     if mcp_names:
         lines.append("MCP tools: " + ", ".join(sorted(str(t) for t in mcp_names)))
+    # Skill catalog rides the preamble too: single-message providers drop
+    # system roles, so the skill_messages system injection never reaches
+    # the wire - without this the model cannot use any skill.
+    try:
+        catalog = skills_catalog()
+    except Exception:
+        catalog = ''
+    if catalog:
+        lines.append(catalog)
     lines.append(
         "Answer in the user's language, concisely. Plain text plus tool "
         "blocks only. Never echo a tool block back: after tools run, "
@@ -989,6 +999,16 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
             if isinstance(params.get("model"), str) and params["model"].strip():
                 policy["default_model"] = params["model"].strip()
                 changed = True
+            # Kara move: her approval_policy ("never" default) maps here so
+            # the daemon auto-grants instead of stalling on cards nobody
+            # answers. Anything else clears back to ask-everything.
+            if "approval_mode" in params:
+                mode = str(params.get("approval_mode") or "").strip()
+                if mode == "never":
+                    policy["approval_mode"] = "never"
+                else:
+                    policy.pop("approval_mode", None)
+                changed = True
             if "revoke" in params:
                 revoked = revoke(policy, str(params["revoke"]))
                 changed = True
@@ -1043,10 +1063,28 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
             if name:
                 return {"id": request_id, "result": public_section(
                     name, config_section(name))}
-            return {"id": request_id, "result": {"providers": [
-                public_section(n, s) for n, s in sorted(provider_config().items())
-                if isinstance(s, dict)
-            ]}}
+            # Union of known adapters + configured sections: every provider
+            # the daemon can serve gets a block (keyless ones show
+            # has_key=false with the default base_url) so clients can
+            # display, save keys for, and switch to all of them. Kara's
+            # settings + model picker broke on iagent because only
+            # configured sections were listed (just tokenharbor).
+            from .pconfig import DEFAULT_BASES
+            seen = provider_config()
+            names = sorted(
+                set(PROVIDERS)
+                | {k for k, v in seen.items() if isinstance(v, dict)}
+            )
+            out = []
+            for n in names:
+                section = seen.get(n)
+                if not isinstance(section, dict):
+                    section = {}
+                else:
+                    section = dict(section)
+                section.setdefault("base_url", DEFAULT_BASES.get(n, ""))
+                out.append(public_section(n, section))
+            return {"id": request_id, "result": {"providers": out}}
 
         if method == "model/list":
             # Per-provider model enumeration: config override > live
