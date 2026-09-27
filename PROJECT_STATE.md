@@ -208,6 +208,10 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   505-test suite green. Her bots are Python (forexmind/marketmind) —
   runtime ready in guest/userland; sources + watchdog repointing stay
   her-agent moves. Daemon default model fixed (was gpt-4o → gateway 404).
+- command/exec SHIPPED (Kara startup needs it): out-of-band shell, no
+  turn/approval/quota, audited with argv redacted past argv[0], 60s cap.
+  Device proof: echo/node/bash-attach shapes green. Kara paths switched
+  (bash+node under userland; env-file backup skipped on iagent).
 - Kara wire alignment SHIPPED (read her protocol lib): item/tool/call
   carries full DynamicToolCallParams (tool+arguments+callId+threadId+
   turnId); approve() speaks Kara/Codex literals incl. acceptForSession→

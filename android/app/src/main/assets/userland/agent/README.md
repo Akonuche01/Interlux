@@ -32,6 +32,7 @@ python3 -m agent.test_kara
 |---|---|---|
 | `capabilities` | `{"id": 1, "method": "capabilities"}` | `{"result": {"protocol": 1, "methods": [...], "providers": [...], "tools": [...]}}` |
 | `turn` | `{"params": {"user": "...", "provider": "openai"}}` | `{"result": {"turn_id": "..."}}` (+ `usage` when the provider reports it, `rounds` always) |
+| `command/exec` | `{"params": {"command": ["...", "..."]}}` (string array) | `{"result": {"exitCode", "stdout", "stderr"}}` — out-of-band shell for the owning client, no turn/approval/quota; audited with argv redacted |
 | `turn` + images | `{"params": {"user": "...", "images": ["<path or data: URL>"]}}` | same, model sees the images |
 | `approve` | `{"params": {"id": "...", "decision": "accept", "scope": "turn"\|"session"}}` | `{"result": true}` |
 | `policy` | `{"params": {}}` or `{"params": {"sandbox": "read-only"}}` or `{"params": {"provider": "...", "model": "..."}}` or `{"params": {"revoke": "<thread>"\|"*"}}` | `{"result": {"policy": {...}, "path": "...", "revoked": n}}` — `default_provider`/`default_model` fill turns that omit them |

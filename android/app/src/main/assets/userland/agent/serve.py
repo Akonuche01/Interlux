@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import AsyncIterator
@@ -779,7 +780,7 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                     "protocol": 1,
                     "methods": [
                         "turn", "cancel", "capabilities", "approve",
-                        "initialize",
+                        "initialize", "command/exec",
                         "tools_refresh", "tools", "tools/register",
                         "tools/unregister", "policy", "skills", "mcp",
                         "providers", "turn/steer", "model/list",
@@ -1497,6 +1498,54 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
             return {"id": request_id, "result": {
                 "id": entry["id"], "cancelled": cancelled,
                 "status": entry["status"]}}
+
+        if method == "command/exec":
+            # Out-of-band shell for the owning client (Kara move): quota-free,
+            # model-free device commands (attachment pulls, provider model
+            # probes, wake-lock tolerance). No turn, no approval, no quota —
+            # the caller is trusted UI acting on user taps, same loopback
+            # trust as the rest of this daemon. Every call IS audited, with
+            # argv redacted past argv[0] (callers pass keys in argv).
+            cmd = params.get("command", [])
+            if (not isinstance(cmd, list) or not cmd
+                    or not all(isinstance(x, str) for x in cmd)):
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602,
+                             "message": "command must be a string array"},
+                }
+            home = os.environ.get("HOME") or str(Path.home())
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    cwd=home,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                try:
+                    stdout, stderr = await asyncio.wait_for(
+                        proc.communicate(), timeout=60)
+                    rc = proc.returncode
+                except asyncio.TimeoutError:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    stdout, stderr, rc = b"", b"timeout after 60s", 124
+            except FileNotFoundError:
+                stdout, stderr, rc = (
+                    b"", f"not on PATH: {cmd[0]}".encode(), 127)
+            except Exception as e:
+                stdout, stderr, rc = b"", str(e).encode(), 126
+            out = stdout.decode(errors="replace")[:65536]
+            err = stderr.decode(errors="replace")[:65536]
+            try:
+                audit.append({"type": "exec", "argv0": cmd[0],
+                              "argc": len(cmd), "exit_code": rc})
+            except Exception:
+                pass
+            return {"id": request_id, "result": {
+                "exitCode": rc, "stdout": out, "stderr": err}}
 
         if method == "cancel":
             tid = params.get("turn_id") or params.get("id") or ""
