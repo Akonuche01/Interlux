@@ -189,6 +189,11 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   history (fail/overwrite/append) from e.g. codex thread/read output;
   imported history reaches providers like native history. Device proof
   5/5 E2E.
+- Restart surface CODE SHIPPED (Kotlin compile + manifest merge green):
+  exported AgentControl service (START/STOP/RESTART/STATUS + result
+  PendingIntent) under signature-level CONTROL_AGENT permission; device
+  proof waits for next APK install (CI build → Files app, then adb-driven
+  intents + version check here).
 - Honesty audit 2026-09-26 (boss: par = everything Termux runs): NO apt/
   dpkg/pkg in bin/ (user typed apt -> not found); userland has node+python
   only; guest has python3.14+pip and perl only; ruby/php/go/java/rust/gcc

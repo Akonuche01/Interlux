@@ -87,6 +87,31 @@ object AgentDaemon {
         }
     }
 
+    /** Public status for the control surface. */
+    fun isRunning(): Boolean = isUp()
+
+    /** Our daemon pid, if the pid file names one. */
+    fun pid(context: Context): Long? {
+        return try {
+            pidFile(context.applicationContext).takeIf { it.exists() }
+                ?.readText()?.trim()?.toLongOrNull()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun waitUpPublic(): Boolean = waitUp()
+
+    /** Fresh daemon (picks up new agent/*.py). Blocks briefly. */
+    fun restart(context: Context) {
+        stop(context)
+        try {
+            Thread.sleep(1000)
+        } catch (_: Exception) {
+        }
+        ensure(context)
+    }
+
     private fun isUp(): Boolean {
         return try {
             Socket().use { s ->

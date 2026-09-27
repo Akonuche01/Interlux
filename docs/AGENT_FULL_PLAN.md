@@ -127,7 +127,7 @@ drawer/timeline/config need surface we have not built yet. None of it breaks
 | M5 | Client-registered tools (`ask_provider` callback) or explicit wont-do | SHIPPED (I.3: tools/register, tool/call callback, owner-only unregister) | new Epic (I) |
 | M7 | Kara move-in surface (read from her source 2026-09-27): initialize handshake, thread/archive+unarchive+unsubscribe+name/set, turn/completed items authority, enriched approvals, compacted/error/diff notifications | SHIPPED (Kara-compat battery 15/15 device E2E) | new Epic (I) |
 | M8 | Bulk history import for migration (Kara's codex threads carry over) | SHIPPED (thread/import: validated modes fail/overwrite/append, audited, device-proven with provider-visible history) | new Epic (I) |
-| M6 | Inter-app restart surface (auto-start already exists via TerminalService + BootReceiver; needs APK rebuild) | TODO | app-side |
+| M6 | Inter-app restart surface (auto-start already exists via TerminalService + BootReceiver; needs APK rebuild) | CODE SHIPPED (AgentControl service + signature permission, gradle-verified); device proof pending next install |
 
 Resolved by B–E: `thread/resume|fork|compact`, `memories`, `skills` list,
 MCP client (`mcp_<server>__<tool>`), per-turn providers, sandboxes, audit.

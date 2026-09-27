@@ -19,6 +19,11 @@
     <!-- Phase 3.11: location fix for the device API (runtime prompt). -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- Kara move-in (M6): inter-app agent control. Signature-level: only
+         apps signed with OUR key (Kara, built by us) can drive the daemon. -->
+    <permission
+        android:name="com.keneristudios.interlux.permission.CONTROL_AGENT"
+        android:protectionLevel="signature" />
     <application
         android:label="Interlux"
         android:name=".InterluxApplication"
@@ -56,6 +61,20 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+        <!-- Kara move-in (M6): exported agent control (START/STOP/RESTART/
+             STATUS), guarded by the signature-level CONTROL_AGENT permission.
+             Kara drives it with explicit intents + a result PendingIntent. -->
+        <service
+            android:name=".agent.AgentControl"
+            android:exported="true"
+            android:permission="com.keneristudios.interlux.permission.CONTROL_AGENT">
+            <intent-filter>
+                <action android:name="com.keneristudios.interlux.action.START_AGENT" />
+                <action android:name="com.keneristudios.interlux.action.STOP_AGENT" />
+                <action android:name="com.keneristudios.interlux.action.RESTART_AGENT" />
+                <action android:name="com.keneristudios.interlux.action.AGENT_STATUS" />
+            </intent-filter>
+        </service>
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"
