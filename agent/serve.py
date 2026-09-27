@@ -13,12 +13,15 @@ from typing import AsyncIterator
 from .audit import AuditLog
 from . import mcp as mcp_mod
 from .pconfig import (
+    CONFIG_SECTIONS,
     PROVIDER_NAME_RE,
+    WEB_SEARCH_MODES,
     config_section,
     env_pinned,
     list_models,
     make_provider,
     provider_config,
+    public_config_section,
     public_section,
     read_providers_file,
     write_providers_file,
@@ -896,7 +899,8 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                         "initialize", "command/exec",
                         "tools_refresh", "tools", "tools/register",
                         "tools/unregister", "policy", "skills", "mcp",
-                        "providers", "turn/steer", "model/list",
+                        "providers", "config/section", "turn/steer",
+                        "model/list",
                         "thread/resume", "thread/fork", "thread/compact",
                         "thread/list", "thread/read", "thread/archive",
                         "thread/unarchive", "thread/unsubscribe",
@@ -1085,6 +1089,49 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                 section.setdefault("base_url", DEFAULT_BASES.get(n, ""))
                 out.append(public_section(n, section))
             return {"id": request_id, "result": {"providers": out}}
+
+        if method == "config/section":
+            # One non-provider section of the provider config -- today only
+            # `web_search`. There is no `config/read` on this daemon, so the
+            # section is addressed on its own terms; wrapping it in a method
+            # name that implies a general config system would be the lie.
+            # Writes copy `providers` exactly: refuse when env-pinned, audit
+            # what changed, atomic replace.
+            name = str(params.get("name") or "")
+            if name not in CONFIG_SECTIONS:
+                return {"id": request_id, "error": {"code": -32602,
+                        "message": (f"unknown config section: "
+                                    f"{name or '(empty)'} (known: "
+                                    f"{', '.join(CONFIG_SECTIONS)})")}}
+            if "set" in params:
+                if env_pinned():
+                    return {"id": request_id, "error": {"code": -32602, "message": (
+                            "config is env-pinned (INTERLUX_PROVIDERS); "
+                            "file write refused")}}
+                patch = params["set"]
+                if not isinstance(patch, dict):
+                    return {"id": request_id, "error": {"code": -32602,
+                            "message": "set must be an object"}}
+                unknown = sorted(k for k in patch if k != "mode")
+                if unknown:
+                    return {"id": request_id, "error": {"code": -32602,
+                            "message": f"unmapped config key: {unknown[0]}"}}
+                mode = str(patch.get("mode", "live") or "live").strip().lower()
+                if mode not in WEB_SEARCH_MODES:
+                    return {"id": request_id, "error": {"code": -32602,
+                            "message": (f"bad web_search mode: {mode!r} "
+                                        f"(one of {', '.join(WEB_SEARCH_MODES)})")}}
+                data = read_providers_file()
+                section = data.setdefault("web_search", {})
+                if not isinstance(section, dict):
+                    section = data["web_search"] = {}
+                section["mode"] = mode
+                write_providers_file(data)
+                audit.append({"type": "config_section",
+                              "section": "web_search", "mode": mode})
+                logger.info(f"web_search section mode set to {mode}")
+            return {"id": request_id, "result": public_config_section(
+                "web_search", config_section("web_search"))}
 
         if method == "model/list":
             # Per-provider model enumeration: config override > live

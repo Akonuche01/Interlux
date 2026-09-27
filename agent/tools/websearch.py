@@ -2,9 +2,14 @@
 
 Config (never hardcoded): a "web_search" section in the provider config —
 INTERLUX_PROVIDERS env JSON first, then ~/.interlux/agent/providers.json:
-  {"web_search": {"base_url": "https://api.tavily.com",
+  {"web_search": {"mode": "live",        # "live"|"disabled"; absent == live
+                  "base_url": "https://api.tavily.com",
                   "api_key": "...", "path": "/search",
                   "extra": {"search_depth": "basic"}}}
+
+`mode` is Kara's Capabilities toggle landing in the same file the tool
+already reads: `disabled` turns the search away with the reason, and
+anything else (including an absent mode) searches.
 
 Request shape is Tavily-compatible: {"api_key","query","max_results",...extra}.
 Any endpoint answering {"answer", "results":[{title,url,content}]} works.
@@ -145,6 +150,12 @@ async def web_search(query: str = "", count: int = 5) -> dict:
     if not query:
         return {"status": "error", "message": "query is required"}
     cfg = _section()
+    # Capabilities -> Web search. Absent means live, so the tool works before
+    # that screen is ever opened; only an explicit "disabled" turns a query
+    # away, and it says why rather than failing as if the network broke.
+    if str(cfg.get("mode", "live") or "live").strip().lower() == "disabled":
+        return {"status": "error",
+                "message": "web_search is off (Capabilities -> Web search)"}
     base = str(cfg.get("base_url", "")).rstrip("/")
     key = str(cfg.get("api_key", ""))
     if not base or not key:
