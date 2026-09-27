@@ -55,6 +55,9 @@ class TerminalService : Service() {
             // Bot watchdog alarm (idempotent arm). Autostart itself stays
             // opt-in via the bots.autostart file — see BotSupervisor.
             com.keneristudios.interlux.agent.BotWatchdog.arm(this)
+            // Resume autostart-listed bots now (reboot/app-restart path);
+            // the 15-minute tick covers later deaths.
+            com.keneristudios.interlux.agent.BotSupervisor.ensureRestart(this)
         }.also { it.isDaemon = true; it.start() }
         return START_STICKY
     }
