@@ -1,10 +1,14 @@
 package com.keneristudios.interlux.agent
 
 import android.app.Activity
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import com.keneristudios.interlux.BootTracer
@@ -17,8 +21,8 @@ import com.keneristudios.interlux.TerminalService
  * `com.keneristudios.interlux.permission.CONTROL_AGENT` permission: only
  * apps signed with OUR key (Kara, built by us) can call it. Actions:
  * START_AGENT (make sure everything is up), STOP_AGENT (daemon down until
- * the next service start), RESTART_AGENT (fresh daemon, picks up new
- * agent/*.py without an app restart), AGENT_STATUS (is it answering?).
+ * the next service start), RESTART_AGENT (fresh daemon, picks up changed
+ * agent files without an app restart), AGENT_STATUS (is it answering?).
  *
  * Results go back through the caller's `EXTRA_RESULT` PendingIntent
  * (createPendingResult-style): extras {ok, running, pid, error}.
@@ -31,6 +35,10 @@ class AgentControl : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         val replyTo = resultTo(intent)
+        // Foreground promotion FIRST: callers include alarm receivers and adb,
+        // where a background service start would otherwise be refused or
+        // killed. MIN importance + removed on completion (usually <1s).
+        promote()
         Thread {
             try {
                 when (action) {
@@ -57,6 +65,48 @@ class AgentControl : Service() {
                         val up = AgentDaemon.isRunning()
                         reply(replyTo, ok = true, running = up)
                     }
+                    ACTION_START_BOTS -> {
+                        // Kara move: her watchdog used to poke Termux; ours
+                        // supervises the relocated trees directly.
+                        val bot = intent?.getStringExtra(EXTRA_BOT)
+                        val res = BotSupervisor.start(this, bot)
+                        val autostart = intent?.getBooleanExtra(
+                            EXTRA_AUTOSTART, false) == true
+                        if (autostart) {
+                            val names = if (bot.isNullOrBlank()) {
+                                BotSupervisor.BOTS.map { it.name }
+                            } else {
+                                listOf(bot)
+                            }
+                            val current = BotSupervisor.autostartNames(this)
+                                .toMutableSet()
+                            current.addAll(names)
+                            BotSupervisor.setAutostart(this, current.toList())
+                        }
+                        BootTracer.step("control: START_BOTS $res")
+                        replyMap(replyTo, ok = true, running = null,
+                            extra = mapOf("bots" to res))
+                    }
+                    ACTION_STOP_BOTS -> {
+                        val bot = intent?.getStringExtra(EXTRA_BOT)
+                        val res = BotSupervisor.stop(this, bot)
+                        BootTracer.step("control: STOP_BOTS $res")
+                        replyMap(replyTo, ok = true, running = null,
+                            extra = mapOf("bots" to res))
+                    }
+                    ACTION_BOTS_STATUS -> {
+                        val res = BotSupervisor.status(this)
+                        replyMap(replyTo, ok = true, running = null,
+                            extra = mapOf("bots" to res))
+                    }
+                    ACTION_BOTS_AUTOSTART -> {
+                        val names = intent?.getStringExtra(EXTRA_BOTS)
+                            ?.split(",")?.map { it.trim() }
+                            ?.filter { it.isNotEmpty() } ?: emptyList()
+                        BotSupervisor.setAutostart(this, names)
+                        replyMap(replyTo, ok = true, running = null,
+                            extra = mapOf("autostart" to names))
+                    }
                     else -> {
                         reply(replyTo, ok = false, running = false,
                             error = "unknown action: $action")
@@ -67,6 +117,10 @@ class AgentControl : Service() {
                 reply(replyTo, ok = false, running = false,
                     error = e.message)
             } finally {
+                try {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } catch (_: Exception) {
+                }
                 stopSelf(startId)
             }
         }.also { it.isDaemon = true; it.start() }
@@ -89,6 +143,66 @@ class AgentControl : Service() {
         }
     }
 
+    /** Reply variant for map payloads (bots supervision). Values must be
+     * Bundle-safe (maps/lists of strings, booleans, longs). */
+    private fun replyMap(to: PendingIntent?, ok: Boolean, running: Boolean?,
+                         extra: Map<String, Any?>) {
+        if (to == null) return
+        try {
+            val fill = Intent().apply {
+                putExtra(RESULT_OK_KEY, ok)
+                if (running != null) putExtra(RESULT_RUNNING_KEY, running)
+                putExtra(RESULT_PAYLOAD_KEY, stringify(extra))
+            }
+            to.send(this, if (ok) Activity.RESULT_OK else Activity.RESULT_CANCELED, fill)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun stringify(value: Any?): String {
+        return when (value) {
+            null -> "null"
+            is Map<*, *> -> value.entries.joinToString(",", "{", "}") { (k, v) ->
+                "\"$k\":${stringify(v)}"
+            }
+            is List<*> -> value.joinToString(",", "[", "]") { stringify(it) }
+            is String -> "\"$value\""
+            else -> value.toString()
+        }
+    }
+
+    private fun promote() {
+        try {
+            val manager =
+                getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                manager.createNotificationChannel(
+                    NotificationChannel(
+                        CHANNEL_ID,
+                        "Interlux control",
+                        NotificationManager.IMPORTANCE_MIN,
+                    ),
+                )
+            }
+            val notification = Notification.Builder(this, CHANNEL_ID)
+                .setContentTitle("Interlux control")
+                .setSmallIcon(android.R.drawable.stat_notify_sync)
+                .setOngoing(true)
+                .build()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
     private fun resultTo(intent: Intent?): PendingIntent? {
         if (intent == null) return null
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -100,6 +214,8 @@ class AgentControl : Service() {
     }
 
     companion object {
+        const val CHANNEL_ID = "interlux-control"
+        const val NOTIFICATION_ID = 2
         const val PERMISSION = "com.keneristudios.interlux.permission.CONTROL_AGENT"
         const val ACTION_START_AGENT =
             "com.keneristudios.interlux.action.START_AGENT"
@@ -109,12 +225,27 @@ class AgentControl : Service() {
             "com.keneristudios.interlux.action.RESTART_AGENT"
         const val ACTION_AGENT_STATUS =
             "com.keneristudios.interlux.action.AGENT_STATUS"
+        const val ACTION_START_BOTS =
+            "com.keneristudios.interlux.action.START_BOTS"
+        const val ACTION_STOP_BOTS =
+            "com.keneristudios.interlux.action.STOP_BOTS"
+        const val ACTION_BOTS_STATUS =
+            "com.keneristudios.interlux.action.BOTS_STATUS"
+        const val ACTION_BOTS_AUTOSTART =
+            "com.keneristudios.interlux.action.BOTS_AUTOSTART"
+        const val EXTRA_BOT =
+            "com.keneristudios.interlux.extra.BOT"
+        const val EXTRA_BOTS =
+            "com.keneristudios.interlux.extra.BOTS"
+        const val EXTRA_AUTOSTART =
+            "com.keneristudios.interlux.extra.AUTOSTART"
         const val EXTRA_RESULT =
             "com.keneristudios.interlux.extra.RESULT"
         const val RESULT_OK_KEY = "ok"
         const val RESULT_RUNNING_KEY = "running"
         const val RESULT_PID_KEY = "pid"
         const val RESULT_ERROR_KEY = "error"
+        const val RESULT_PAYLOAD_KEY = "payload"
 
         /** Explicit intent Kara (or adb) sends to drive the daemon. */
         fun intent(context: Context, action: String): Intent {

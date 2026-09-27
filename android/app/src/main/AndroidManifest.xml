@@ -67,14 +67,27 @@
         <service
             android:name=".agent.AgentControl"
             android:exported="true"
+            android:foregroundServiceType="specialUse"
             android:permission="com.keneristudios.interlux.permission.CONTROL_AGENT">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Short-lived control operations (agent/bot status and restarts) requested by our own apps." />
             <intent-filter>
                 <action android:name="com.keneristudios.interlux.action.START_AGENT" />
                 <action android:name="com.keneristudios.interlux.action.STOP_AGENT" />
                 <action android:name="com.keneristudios.interlux.action.RESTART_AGENT" />
                 <action android:name="com.keneristudios.interlux.action.AGENT_STATUS" />
+                <action android:name="com.keneristudios.interlux.action.START_BOTS" />
+                <action android:name="com.keneristudios.interlux.action.STOP_BOTS" />
+                <action android:name="com.keneristudios.interlux.action.BOTS_STATUS" />
+                <action android:name="com.keneristudios.interlux.action.BOTS_AUTOSTART" />
             </intent-filter>
         </service>
+        <!-- Bot watchdog ticks (Kara move): in-process alarm receiver, no
+             service start, no notification. Armed from TerminalService. -->
+        <receiver
+            android:name=".agent.BotWatchdog"
+            android:exported="false" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"

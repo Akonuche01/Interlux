@@ -102,7 +102,7 @@ object AgentDaemon {
 
     fun waitUpPublic(): Boolean = waitUp()
 
-    /** Fresh daemon (picks up new agent/*.py). Blocks briefly. */
+    /** Fresh daemon (picks up changed agent files). Blocks briefly. */
     fun restart(context: Context) {
         stop(context)
         try {

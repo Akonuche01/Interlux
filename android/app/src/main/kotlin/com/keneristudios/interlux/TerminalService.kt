@@ -37,6 +37,7 @@ class TerminalService : Service() {
                 com.keneristudios.interlux.agent.AgentDaemon.stop(this)
                 com.keneristudios.interlux.agent.TabBridge.stop()
                 com.keneristudios.interlux.agent.LlamaServer.stop(this)
+                com.keneristudios.interlux.agent.BotWatchdog.disarm(this)
             }.also { it.isDaemon = true; it.start() }
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
@@ -51,6 +52,9 @@ class TerminalService : Service() {
             com.keneristudios.interlux.agent.AgentDaemon.ensure(this)
             com.keneristudios.interlux.agent.TabBridge.ensure()
             com.keneristudios.interlux.agent.LlamaServer.ensure(this)
+            // Bot watchdog alarm (idempotent arm). Autostart itself stays
+            // opt-in via the bots.autostart file — see BotSupervisor.
+            com.keneristudios.interlux.agent.BotWatchdog.arm(this)
         }.also { it.isDaemon = true; it.start() }
         return START_STICKY
     }
