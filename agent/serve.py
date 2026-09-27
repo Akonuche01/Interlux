@@ -423,7 +423,8 @@ def agency_text() -> str:
         lines.append("MCP tools: " + ", ".join(sorted(str(t) for t in mcp_names)))
     lines.append(
         "Answer in the user's language, concisely. Plain text plus tool "
-        "blocks only."
+        "blocks only. Never echo a tool block back: after tools run, "
+        "answer with the RESULT in your own words."
     )
     return "\n".join(lines)
 
