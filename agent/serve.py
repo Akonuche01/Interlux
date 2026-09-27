@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -361,6 +362,60 @@ def _tool_output_status(output: dict) -> str:
     if "result" in output and isinstance(output["result"], dict):
         return str(output["result"].get("status", "success"))
     return str(output.get("status", "error"))
+
+
+def agency_messages() -> list[dict]:
+    """System prompt that makes the model agentic: tool catalog + calling
+    convention. Without this the model never emits tool calls (it was never
+    told the tools exist), which is exactly how Kara lost her agency on the
+    iagent move — Codex shipped this prompt engine-side, iagent did not.
+    """
+    from .tools import WRITE_TOOLS
+    lines = [
+        "You are an AGENT with tools. To act, emit a fenced json block:",
+        '```json [{"tool": "<name>", "parameters": {...}}] ```',
+        "Rules:",
+        "- You may call several tools in one block; they run in order.",
+        "- Tool results return to you next round — use them, then answer.",
+        "- NEVER claim a tool ran unless you received its tool_result.",
+        "- For live/external facts use web_search; your weights may be stale.",
+        "- Read a file before editing it; prefer exact-match fs_edit.",
+        "- Write tools (marked APPROVAL) pause for the user's approval — "
+        "propose them, do not work around the pause.",
+        "Your tools:",
+    ]
+    for name in sorted(TOOLS):
+        if name in _client_tools:
+            spec = _client_tools[name]
+            desc = str(spec.get("description", ""))
+            schema = spec.get("inputSchema") or {}
+            props = schema.get("properties") if isinstance(schema, dict) else None
+            params = ", ".join(sorted(props)) if isinstance(props, dict) else "..."
+            lines.append(f"- {name}({params}) [app tool, APPROVAL]: {desc[:160]}")
+            continue
+        fn = TOOLS[name]
+        try:
+            sig = inspect.signature(fn)
+            params = ", ".join(
+                p for p in sig.parameters if p not in ("self", "cls")
+            )
+        except (TypeError, ValueError):
+            params = "..."
+        doc = (inspect.getdoc(fn) or "").splitlines()
+        brief = doc[0] if doc else ""
+        tag = " [APPROVAL]" if name in WRITE_TOOLS else ""
+        lines.append(f"- {name}({params}){tag}: {brief[:160]}")
+    try:
+        mcp_names = mcp_mod.describe().get("registered_tools", []) or []
+    except Exception:
+        mcp_names = []
+    if mcp_names:
+        lines.append("MCP tools: " + ", ".join(sorted(str(t) for t in mcp_names)))
+    lines.append(
+        "Answer in the user's language, concisely. Plain text plus tool "
+        "blocks only."
+    )
+    return [{"role": "system", "content": "\n".join(lines)}]
 
 
 async def run_tool_loop(turn: dict, client_socket) -> None:
@@ -727,11 +782,12 @@ async def handle_turn(payload: dict, client_socket) -> dict:
     sandbox_token = sandbox_ctx.set(sandbox)
     try:
         # Epic D: skill catalog (+ requested bodies) ride as system messages
-        # inside build_messages, rebuilt every Epic J round.
+        # inside build_messages, rebuilt every Epic J round. The agency
+        # prompt (tools + calling convention) rides in front of them.
         return await _execute_turn(
             payload, params, user_msg, provider, model,
             thread_id, turn, client_socket, state,
-            skill_messages(params.get("skills")),
+            agency_messages() + skill_messages(params.get("skills")),
         )
     except asyncio.CancelledError:
         kill_turn(turn["id"])
@@ -1186,6 +1242,18 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                     "error": {"code": -32602, "message": "thread_id required"},
                 }
             state, source = materialize_state(tid)
+            # Kara move: thread/start carries developerInstructions (persona)
+            # and the adapter forwards them here; persist so every later
+            # turn (and resume/fork) injects them as system messages.
+            dev = params.get("developer_instructions")
+            if isinstance(dev, str) and dev.strip():
+                dev = dev.strip()[:4000]
+                if state.get("developer") != dev:
+                    state["developer"] = dev
+                    try:
+                        save_state(state)
+                    except Exception:
+                        logger.exception("failed to persist developer prompt")
             return {
                 "id": request_id,
                 "result": {
