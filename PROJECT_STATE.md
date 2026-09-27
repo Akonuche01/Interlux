@@ -196,6 +196,11 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   with tool registration, turn, timeline decode, list) passes in 5s.
   Daemon side: policy default_provider/default_model (device set to
   tokenharbor/deepseek-v4.1-flash:free) so keyless turns work.
+- Kara move part 2 (in her repo): config/read+batchWrite mapped to
+  policy/providers (16 adapter tests green), skills/list mapped, full
+  505-test suite green. Her bots are Python (forexmind/marketmind) —
+  runtime ready in guest/userland; sources + watchdog repointing stay
+  her-agent moves. Daemon default model fixed (was gpt-4o → gateway 404).
 - Kara wire alignment SHIPPED (read her protocol lib): item/tool/call
   carries full DynamicToolCallParams (tool+arguments+callId+threadId+
   turnId); approve() speaks Kara/Codex literals incl. acceptForSession→
