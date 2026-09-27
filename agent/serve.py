@@ -46,6 +46,7 @@ from .skills import (
     USER_DIR as SKILLS_USER_DIR,
 )
 from .threads import (
+    DEFAULT_IDENTITY,
     archive_thread,
     build_messages,
     fold_output,
@@ -369,7 +370,16 @@ def agency_messages() -> list[dict]:
     convention. Without this the model never emits tool calls (it was never
     told the tools exist), which is exactly how Kara lost her agency on the
     iagent move — Codex shipped this prompt engine-side, iagent did not.
+
+    NOTE: OpenAI-compatible providers here are single-message (only the
+    last user message goes on the wire), so this must ALSO ride inside
+    the user content via preamble_text() — system roles alone never
+    reach the model.
     """
+    return [{"role": "system", "content": agency_text()}]
+
+
+def agency_text() -> str:
     from .tools import WRITE_TOOLS
     lines = [
         "You are an AGENT with tools. To act, emit a fenced json block:",
@@ -415,7 +425,17 @@ def agency_messages() -> list[dict]:
         "Answer in the user's language, concisely. Plain text plus tool "
         "blocks only."
     )
-    return [{"role": "system", "content": "\n".join(lines)}]
+    return "\n".join(lines)
+
+
+def preamble_text(state: dict) -> str:
+    """Identity + agency prompt as plain text, prepended to the user's
+    message. Providers here are single-message (system roles never reach
+    the wire), so without this the model would never see who it is or
+    what tools it has.
+    """
+    developer = (state.get("developer") or "").strip()
+    return f"{developer or DEFAULT_IDENTITY}\n\n{agency_text()}"
 
 
 async def run_tool_loop(turn: dict, client_socket) -> None:
@@ -594,7 +614,10 @@ async def _execute_turn(
         max_rounds = 1
     max_rounds = max(1, min(max_rounds, 10))
 
-    working_content = user_msg
+    # Single-message providers only ever see the last user message, so the
+    # identity + tool prompt must ride INSIDE it (system roles are built
+    # too, for providers that honor them, but they never reach this wire).
+    working_content = preamble_text(state) + "\n\n---\n\n" + user_msg
     while True:
         turn["rounds"] += 1
         rnd = turn["rounds"]
