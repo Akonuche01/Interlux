@@ -47,6 +47,11 @@ python3 -m agent.test_kara
 | `tools` | `{"id": n, "method": "tools"}` | `{"result": {"tools": [...], "client_tools": [...], "mcp_tools": [...]}}` |
 | `tools/register` | `{"params": {"name": "...", "description": "..."}}` | daemon calls the tool back out over your socket (`tool/call`) |
 | `tools/unregister` | `{"params": {"name": "..."}}` | owner-only removal |
+| `initialize` | `{"params": {"clientInfo": {"name", "version"}}}` | `{"result": {"server": "iagent", "protocol": 1}}` (handshake; `initialized` notifications get no reply) |
+| `thread/archive` | `{"params": {"thread_id": "..."}}` | hides from list (audit kept, restorable) |
+| `thread/unarchive` | `{"params": {"thread_id": "..."}}` | restores (refuses to overwrite live state) |
+| `thread/unsubscribe` | `{"params": {"thread_id": "..."}}` | always true (hygiene no-op) |
+| `thread/name/set` | `{"params": {"thread_id": "...", "name": "..."}}` | names the thread (+ `thread/name/updated` broadcast) |
 | `model/list` | `{"params": {"provider"?: "..."}}` (omit for all) | `{"result": {"provider", "default", "models": [{id, source}]}}` — config override > live `/models` > curated; never secrets |
 | `subagent/spawn` | `{"params": {"thread_id": "...", "message": "...", "provider"? , "max_rounds"?, "context"?}}` | `{"result": {"id", "thread_id", "parent", "status": "running"}}` — background turn on a child thread |
 | `subagent/status` | `{"params": {"id": "..."}}` | `{"result": {"id", "status", "thread_id", "parent"}}` |
@@ -73,6 +78,13 @@ Notifications:
   (`tools` run, `usage`, or `cancelled: true`)
 - `item/started` + `item/completed` per tool call (`item_id`, `tool`,
   completion `status`: success|error|denied|blocked)
+- `turn/completed` also carries `items: [{id, tool, status}]` as the
+  reconcile authority for rich timelines
+- `approval_request` params carry `command` + `tool` (+ `path` when the
+  call has one) so clients can render command vs file-change approvals
+- `thread/compacted` after compact; `error` notification (with message)
+  on turn failure; `diff/updated` (repo, diff_stat, summary) after a
+  successful `review` tool call
 - `fs/changed` (`op`, `path`) on successful fs_write/fs_edit/image_generate
 - `skills/changed` (current skill names) after skills refresh
 - `mcpServer/started` + `mcpServer/stopped` (`server`, `tools`)

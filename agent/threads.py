@@ -20,6 +20,7 @@ CONFIG_DIR = Path(
     os.environ.get("INTERLUX_AGENT_CONFIG", "~/.interlux/agent")
 ).expanduser()
 THREADS_DIR = CONFIG_DIR / "threads"
+ARCHIVE_DIR = THREADS_DIR / ".archived"
 AUDIT_FILE = CONFIG_DIR / "audit.jsonl"
 
 _ASSISTANT_CAP = 40_000
@@ -50,6 +51,7 @@ def new_state(thread_id: str, parent: str | None = None) -> dict:
         "thread_id": thread_id,
         "turns": 0,
         "base": "",
+        "name": "",
         "history": [],
         "parent": parent,
         "created": ts,
@@ -67,6 +69,7 @@ def load_state(thread_id: str) -> dict | None:
             return None
         state.setdefault("history", [])
         state.setdefault("base", "")
+        state.setdefault("name", "")
         state.setdefault("turns", 0)
         return state
     except Exception:
@@ -274,6 +277,7 @@ def list_threads(limit: int = 50) -> list[dict]:
             has_mem = False
         summaries.append({
             "thread_id": thread_id,
+            "name": state.get("name", ""),
             "turns": state.get("turns", 0),
             "messages": len(history),
             "created": state.get("created", ""),
@@ -316,7 +320,45 @@ def read_thread(thread_id: str, limit: int = 100) -> dict | None:
         "source": source,
         "turns": state.get("turns", 0),
         "base": state.get("base", ""),
+        "name": state.get("name", ""),
         "memories": read_memories(thread_id),
         "messages": history[-limit:],
         "total": len(history),
     }
+
+
+def archive_thread(thread_id: str) -> bool:
+    """Move state + memories to .archived/ (hidden from list, restorable).
+
+    Audit history is untouched, so an archived thread stays readable via
+    audit replay until unarchived.
+    """
+    src_state, src_mem = state_path(thread_id), memories_path(thread_id)
+    if not src_state.exists():
+        return False
+    ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        src_state.replace(ARCHIVE_DIR / src_state.name)
+        if src_mem.exists():
+            src_mem.replace(ARCHIVE_DIR / src_mem.name)
+    except OSError:
+        return False
+    return True
+
+
+def unarchive_thread(thread_id: str) -> bool:
+    """Restore an archived thread. Refuses to overwrite a live state."""
+    dst_state, dst_mem = state_path(thread_id), memories_path(thread_id)
+    if dst_state.exists():
+        return False
+    src_state = ARCHIVE_DIR / (state_path(thread_id).name)
+    if not src_state.exists():
+        return False
+    try:
+        src_state.replace(dst_state)
+        src_mem = ARCHIVE_DIR / (memories_path(thread_id).name)
+        if src_mem.exists():
+            src_mem.replace(dst_mem)
+    except OSError:
+        return False
+    return True

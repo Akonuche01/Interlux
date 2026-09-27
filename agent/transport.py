@@ -41,6 +41,11 @@ class Transport:
         try:
             payload = json.loads(message)
             logger.info(f"Calling handler with {payload}")
+            if isinstance(payload, dict) and "id" not in payload:
+                # JSON-RPC notification (e.g. `initialized`): execute for
+                # side effects, send no reply.
+                await self.handler(payload, websocket)
+                return
             response = await self.handler(payload, websocket)
             if response is None:
                 # Handler consumed a frame that needs no reply (e.g. the

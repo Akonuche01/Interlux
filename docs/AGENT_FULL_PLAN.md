@@ -125,6 +125,7 @@ drawer/timeline/config need surface we have not built yet. None of it breaks
 | M3 | Provider key management RPC (keys live in our private filesDir; Kara cannot write the file) | SHIPPED (I.3: providers get/set/delete, masked, audited keyless) | new Epic (I) |
 | M4 | `turn/steer` (mid-turn steering) or explicit wont-do | SHIPPED (I.3: cancel + record + optional carrying turn) | new Epic (I) |
 | M5 | Client-registered tools (`ask_provider` callback) or explicit wont-do | SHIPPED (I.3: tools/register, tool/call callback, owner-only unregister) | new Epic (I) |
+| M7 | Kara move-in surface (read from her source 2026-09-27): initialize handshake, thread/archive+unarchive+unsubscribe+name/set, turn/completed items authority, enriched approvals, compacted/error/diff notifications | SHIPPED (Kara-compat battery 15/15 device E2E) | new Epic (I) |
 | M6 | Inter-app restart surface (auto-start already exists via TerminalService + BootReceiver; needs APK rebuild) | TODO | app-side |
 
 Resolved by B–E: `thread/resume|fork|compact`, `memories`, `skills` list,

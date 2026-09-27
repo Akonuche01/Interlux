@@ -180,6 +180,11 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   session stickiness, header auth, loud 401/refused reporting; OAuth
   explicitly deferred app-side). Device proof 5/5 E2E against a local HTTP
   stub (both transports live, approval, restart) + grants/J regression.
+- Kara move-in SHIPPED (read her source 2026-09-27): initialize handshake,
+  thread/archive+unarchive+unsubscribe+name/set, turn/completed items
+  authority, enriched approvals (tool+path), thread/compacted + error +
+  diff/updated notifications, notifications get no reply. Device proof
+  15/15 E2E.
 - Honesty audit 2026-09-26 (boss: par = everything Termux runs): NO apt/
   dpkg/pkg in bin/ (user typed apt -> not found); userland has node+python
   only; guest has python3.14+pip and perl only; ruby/php/go/java/rust/gcc

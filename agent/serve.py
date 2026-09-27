@@ -44,6 +44,7 @@ from .skills import (
     USER_DIR as SKILLS_USER_DIR,
 )
 from .threads import (
+    archive_thread,
     build_messages,
     fold_output,
     fork_state,
@@ -58,6 +59,7 @@ from .threads import (
     save_state,
     state_path,
     transcript_text,
+    unarchive_thread,
     write_memories,
 )
 from .tools import EXTRA_WRITE, TOOLS, approval_label, needs_approval
@@ -284,6 +286,13 @@ async def _call_client_tool(name: str, arguments: dict) -> dict:
     return {"status": "success", "output": res}
 
 
+def _tool_output_status(output: dict) -> str:
+    """Outcome status of one recorded tool entry (for items arrays)."""
+    if "result" in output and isinstance(output["result"], dict):
+        return str(output["result"].get("status", "success"))
+    return str(output.get("status", "error"))
+
+
 async def run_tool_loop(turn: dict, client_socket) -> None:
     """Execute tool calls with approval flow."""
     tool_calls = turn.get("tool_calls", [])
@@ -351,7 +360,10 @@ async def run_tool_loop(turn: dict, client_socket) -> None:
                 )
             else:
                 fid = f"{thread_id}:{len(approvals.pending)}"
-                approval_params = {"command": label, "id": fid}
+                approval_params = {"command": label, "id": fid,
+                                   "tool": tool_name}
+                if isinstance(params, dict) and params.get("path"):
+                    approval_params["path"] = str(params["path"])[:500]
 
                 approval_future = approvals.request_approval(
                     thread_id, approval_params, tool=tool_name, label=label
@@ -395,6 +407,16 @@ async def run_tool_loop(turn: dict, client_socket) -> None:
                         "path": str(result["path"]),
                         "turn_id": turn.get("id"),
                         "thread_id": thread_id,
+                    })
+                if (tool_name == "review" and isinstance(result, dict)
+                        and result.get("status") == "success"):
+                    await broadcast({
+                        "type": "diff/updated",
+                        "turn_id": turn.get("id"),
+                        "thread_id": thread_id,
+                        "repo": str(params.get("cwd", ".")),
+                        "diff_stat": str(result.get("diff_stat", ""))[:2000],
+                        "summary": str(result.get("summary", ""))[:500],
                     })
             except Exception as e:
                 logger.error(f"Tool execution failed: {e}")
@@ -478,6 +500,14 @@ async def _execute_turn(
                 audit.append({"type": "turn", "thread_id": thread_id, **turn})
             except Exception:
                 pass
+            errmsg = next((
+                str(d.get("message") or d.get("content", ""))
+                for d in turn["output"]
+                if isinstance(d, dict) and d.get("type") == "error"
+            ), "turn failed")
+            await broadcast({"type": "error", "turn_id": turn["id"],
+                             "thread_id": thread_id,
+                             "message": errmsg[:1000]})
             result = {"turn_id": turn["id"], "rounds": turn["rounds"]}
             if turn.get("usage"):
                 result["usage"] = turn["usage"]
@@ -539,16 +569,24 @@ async def _execute_turn(
     except Exception:
         pass
     # Epic I.2: one rich terminal event; legacy `complete` kept as alias.
-    tools_run = [
-        o.get("tool") for o in turn["output"]
+    # The items array is the reconcile authority for rich timelines.
+    tool_entries = [
+        o for o in turn["output"]
         if isinstance(o, dict) and o.get("tool")
     ]
+    tools_run = [o.get("tool") for o in tool_entries]
+    items = [{
+        "id": f"{turn['id']}:item:{i}",
+        "tool": o.get("tool"),
+        "status": _tool_output_status(o),
+    } for i, o in enumerate(tool_entries)]
     completed = {
         "type": "turn/completed",
         "turn_id": turn["id"],
         "thread_id": thread_id,
         "mode": turn.get("mode", "exec"),
         "tools": tools_run,
+        "items": items,
     }
     if turn.get("usage"):
         completed["usage"] = turn["usage"]
@@ -661,11 +699,14 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                     "protocol": 1,
                     "methods": [
                         "turn", "cancel", "capabilities", "approve",
+                        "initialize",
                         "tools_refresh", "tools", "tools/register",
                         "tools/unregister", "policy", "skills", "mcp",
                         "providers", "turn/steer", "model/list",
                         "thread/resume", "thread/fork", "thread/compact",
-                        "thread/list", "thread/read", "memories",
+                        "thread/list", "thread/read", "thread/archive",
+                        "thread/unarchive", "thread/unsubscribe",
+                        "thread/name/set", "memories",
                         "subagent/spawn", "subagent/status",
                         "subagent/result", "subagent/list",
                         "subagent/cancel",
@@ -926,7 +967,81 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                 }
             return {"id": request_id, "result": data}
 
-        if method == "thread/resume":            # Open a thread: state file first, audit replay fallback,
+        if method == "initialize":
+            # Kara-compat handshake (her client sends this first). Benign
+            # server description; per-turn auth is not required on loopback.
+            return {"id": request_id, "result": {
+                "server": "iagent", "protocol": 1,
+                "client": params.get("clientInfo", {}),
+            }}
+
+        if method == "thread/archive":
+            # Hide from thread/list (restorable). Audit history untouched.
+            tid = str(params.get("thread_id") or "").strip()
+            if not tid:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602, "message": "thread_id required"},
+                }
+            if not archive_thread(tid):
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602,
+                             "message": f"unknown thread: {tid}"},
+                }
+            audit.append({"type": "thread", "action": "archive",
+                          "thread_id": tid})
+            return {"id": request_id, "result": {"thread_id": tid,
+                                                 "archived": True}}
+
+        if method == "thread/unarchive":
+            tid = str(params.get("thread_id") or "").strip()
+            if not tid:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602, "message": "thread_id required"},
+                }
+            if not unarchive_thread(tid):
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602, "message": (
+                        f"cannot unarchive: {tid}")},
+                }
+            audit.append({"type": "thread", "action": "unarchive",
+                          "thread_id": tid})
+            return {"id": request_id, "result": {"thread_id": tid,
+                                                 "archived": False}}
+
+        if method == "thread/unsubscribe":
+            # Hygiene no-op (like Kara's): nothing server-pushed to stop.
+            return {"id": request_id, "result": True}
+
+        if method == "thread/name/set":
+            tid = str(params.get("thread_id") or "").strip()
+            name = str(params.get("name") or "").strip()[:200]
+            if not tid:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602, "message": "thread_id required"},
+                }
+            state = load_state(tid)
+            if state is None:
+                return {
+                    "id": request_id,
+                    "error": {"code": -32602,
+                             "message": f"unknown thread: {tid}"},
+                }
+            state["name"] = name
+            save_state(state)
+            audit.append({"type": "thread", "action": "name",
+                          "thread_id": tid, "name": name})
+            await broadcast({"type": "thread/name/updated",
+                             "thread_id": tid, "name": name})
+            return {"id": request_id, "result": {"thread_id": tid,
+                                                 "name": name}}
+
+        if method == "thread/resume":
+            # Open a thread: state file first, audit replay fallback,
             # brand-new empty thread otherwise (idempotent).
             tid = str(params.get("thread_id") or "").strip()
             if not tid:
@@ -1042,6 +1157,8 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                 "summary": state["base"],
                 "turns_before": prior_turns,
             })
+            await broadcast({"type": "thread/compacted", "thread_id": tid,
+                             "turns_before": prior_turns})
             return {
                 "id": request_id,
                 "result": {
