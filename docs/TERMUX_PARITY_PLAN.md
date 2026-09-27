@@ -91,10 +91,9 @@ Evidence = boot-log line, screenshot, or `flutter test` — never "should work".
     (+clang 21/llvm/ndk-sysroot closure). Crown proof: compiled + ran a
     Go hello-world ON the phone. Next runtime candidates (unverified):
     rust (125MB+clang), openjdk.
-    CORRECTION 2026-09-26 (device re-audit: userland/bin has node+python
-    only; guest has python3.14+pip and perl only; no ruby/php/go/java/
-    rust anywhere): the runtime set present TODAY is python + node +
-    perl(guest). Ruby/PHP/Go are not installed — moved to item 19.
+    CORRECTION 2026-09-26 (device re-audit found only python/node/perl —
+    then CLOSED same day, see item 19): ruby 4.0.6, PHP 8.5.1, go 1.27.1,
+    openjdk-17, rust 1.98.1 all installed via pkg.sh/apt and hello-proven.
 9. [x] sshd server flow (host keys, password auth, `sshd` on 8022) + SFTP.
     Proven 2026-09-24 on-device: guest Alpine openssh (key auth, root),
     live exec + SFTP file get, managed by `ssh-host.sh start|stop|status`.
@@ -165,12 +164,19 @@ Termux-baked shebangs rewritten at extract, and OPENSSL_CONF=/dev/null
     with signed deltas.
 18. [ ] Performance: 16KB-first binaries (done), lazy userland modules
     (download node/python only if used), cold-start budget < 3s to prompt.
-19. [ ] apt-compatible UX + language breadth (par = everything Termux runs).
-    No apt/dpkg/pkg in bin/ (pkg.sh + pkginstall.sh exist but speak their
-    own verbs) — needs an `apt` verb shim (update/install/remove/list/
-    show/upgrade/search). Languages present 2026-09-26: python + node
-    (userland), python + perl (guest). Missing: ruby, php, go, java,
-    rust, gcc.
+19. [x] apt-compatible UX + language breadth (par = everything Termux runs).
+    `bin/apt` shim over pkg.sh: update/install/remove/upgrade/list/search/
+    show, flags accepted-ignored. Proven 2026-09-26 end-to-end: index
+    refresh (711KB), search/show, `apt install -y tree` → runs → remove →
+    gone.
+    Languages proven same day (userland, versions run, hello-worlds where
+    noted): python 3.14, node 26, ruby 4.0.6, PHP 8.5.1, go 1.27.1
+    (profile now exports GOTMPDIR/GOCACHE/GOPATH — Termux-baked tmp is
+    unwritable), java 17.0.20 (javac + run proven; profile puts its bin on
+    PATH), rust 1.98.1 + cargo (native hello links with
+    `rustc --sysroot=$PREFIX -L native=$PREFIX/lib`; RUSTFLAGS env is
+    ignored by this build — use flags or cargo config), perl (guest),
+    gcc/clang present, GNU ar fixed via binutils.
     PROVEN 2026-09-26 (same audit): Needle 3 runs natively — Cactus
     android-arm64 binary (1.2MB) + needle3.cact (35MB) in
     ~/needle[/3.cact], tool call set_light(room=kitchen) correct at
