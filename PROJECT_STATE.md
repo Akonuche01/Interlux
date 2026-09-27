@@ -189,6 +189,23 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   history (fail/overwrite/append) from e.g. codex thread/read output;
   imported history reaches providers like native history. Device proof
   5/5 E2E.
+- Kara identity+agency RESTORED 2026-09-27 (boss: she called herself
+  Qwen, then DeepSeek, then a tool-less chatbot). Root causes, all on the
+  iagent side of the move: (1) daemon had NO base/identity prompt (Codex
+  shipped one engine-side) and the adapter dropped her
+  `developerInstructions`, so models self-identified from weights;
+  (2) nothing ever told the model the tools or the ```json convention
+  exist, so no tool call ever fired; (3) max_rounds defaulted 1, so tool
+  results could never return to the model; (4) OpenAI-compatible
+  providers only send messages[-1] — system roles never reach the wire.
+  Fix: thread/resume persists developer_instructions; every turn
+  prepends persona + generated tool catalog (preamble_text, inside the
+  user message); adapter forwards persona, pins thread model, sends
+  max_rounds=8 (17/17 adapter tests); web_search gained a keyless
+  DuckDuckGo fallback (no backend configured on device; Tavily-shape
+  config still wins). Live device proof: "who are you" → "I'm Kara";
+  bitcoin-price turn → web_search executed → round 2 answered $84k.
+  Commits 2e75f02/6c462df/a93039d/1d97bee; both APKs rebuilt+installed.
 - Kara adapter BUILT in her repo (Desktop/kara, local git): EngineClient
   interface, IagentClient translator (URL-switched, both engines alive),
   config repoints to Interlux paths. Her 500 tests pass; 11 new adapter
