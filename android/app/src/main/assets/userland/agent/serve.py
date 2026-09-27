@@ -431,6 +431,7 @@ async def run_tool_loop(turn: dict, client_socket) -> None:
                 fid = f"{thread_id}:{len(approvals.pending)}"
                 approval_params = {"command": label, "id": fid,
                                    "tool": tool_name,
+                                   "thread_id": thread_id,
                                    "turn_id": str(turn.get("id", ""))}
                 if isinstance(params, dict) and params.get("path"):
                     approval_params["path"] = str(params["path"])[:500]
@@ -562,7 +563,7 @@ async def _execute_turn(
                 round_text_parts.append(delta.get("content", ""))
             if delta.get("type") == "error":
                 has_error = True
-            await _send_delta(delta)
+            await _send_delta(delta, turn.get("id", ""), thread_id)
 
         # This round's model text (history/context folding happens below).
         round_text = "".join(round_text_parts)
@@ -678,14 +679,18 @@ async def handle_turn(payload: dict, client_socket) -> dict:
     logger.info(f"handle_turn called with payload: {payload}")
     params = payload.get("params", {})
     user_msg = params.get("user", "")
-    provider_name = params.get("provider", "openai")
-    model = params.get("model", "gpt-4o")
 
     thread_id = params.get("thread_id", f"thread-{len(audit.read_last())}")
     # Epic C: thread state = history + base + turn counter (wipe-proof home).
     state = load_state(thread_id) or new_state(thread_id)
+    # Provider + model: turn param wins, then policy default, then built-in.
+    policy = load_policy()
+    provider_name = (params.get("provider")
+                     or policy.get("default_provider") or "openai")
+    model = (params.get("model")
+             or policy.get("default_model") or "gpt-4o")
     # Epic B: turn param wins; policy.json default otherwise.
-    sandbox = resolve_sandbox(params, load_policy())
+    sandbox = resolve_sandbox(params, policy)
     # Epic G: turn mode — "exec" (default) or "plan" (no writes, explicit).
     mode = params.get("mode", "exec")
     if mode not in ("exec", "plan"):
@@ -867,12 +872,18 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
             return {"id": request_id, "error": {"code": -32602, "message": "unknown fid"}}
 
         if method == "policy":
-            # Get/set sandbox default + revoke standing grants.
+            # Get/set sandbox + provider defaults, revoke standing grants.
             policy = load_policy()
             revoked = None
             changed = False
             if params.get("sandbox") in SANDBOX_MODES:
                 policy["sandbox"] = params["sandbox"]
+                changed = True
+            if isinstance(params.get("provider"), str) and params["provider"].strip():
+                policy["default_provider"] = params["provider"].strip()
+                changed = True
+            if isinstance(params.get("model"), str) and params["model"].strip():
+                policy["default_model"] = params["model"].strip()
                 changed = True
             if "revoke" in params:
                 revoked = revoke(policy, str(params["revoke"]))
@@ -1544,11 +1555,17 @@ async def stream_turn(
         yield {"type": "complete"}
 
 
-async def _send_delta(delta: dict) -> None:
+async def _send_delta(delta: dict, turn_id: str = "",
+                      thread_id: str = "") -> None:
     logger.info(f"_send_delta called with delta={delta}")
     content = delta.get("content", delta.get("message", ""))
     logger.info(f"Broadcasting: type={delta.get('type')}, content={content}")
-    await broadcast({"type": delta.get("type"), "content": content})
+    payload = {"type": delta.get("type"), "content": content}
+    if turn_id:
+        payload["turn_id"] = turn_id
+    if thread_id:
+        payload["thread_id"] = thread_id
+    await broadcast(payload)
 
 
 def main() -> int:

@@ -189,6 +189,13 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   history (fail/overwrite/append) from e.g. codex thread/read output;
   imported history reaches providers like native history. Device proof
   5/5 E2E.
+- Kara adapter BUILT in her repo (Desktop/kara, no git there): EngineClient
+  interface, IagentClient translator (URL-switched, both engines alive),
+  config repoints to Interlux paths. Her 500 tests pass; 11 new adapter
+  tests pass; LIVE test (real socket → device daemon: handshake, thread
+  with tool registration, turn, timeline decode, list) passes in 5s.
+  Daemon side: policy default_provider/default_model (device set to
+  tokenharbor/deepseek-v4.1-flash:free) so keyless turns work.
 - Kara wire alignment SHIPPED (read her protocol lib): item/tool/call
   carries full DynamicToolCallParams (tool+arguments+callId+threadId+
   turnId); approve() speaks Kara/Codex literals incl. acceptForSession→

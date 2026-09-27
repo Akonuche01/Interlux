@@ -34,7 +34,7 @@ python3 -m agent.test_kara
 | `turn` | `{"params": {"user": "...", "provider": "openai"}}` | `{"result": {"turn_id": "..."}}` (+ `usage` when the provider reports it, `rounds` always) |
 | `turn` + images | `{"params": {"user": "...", "images": ["<path or data: URL>"]}}` | same, model sees the images |
 | `approve` | `{"params": {"id": "...", "decision": "accept", "scope": "turn"\|"session"}}` | `{"result": true}` |
-| `policy` | `{"params": {}}` or `{"params": {"sandbox": "read-only"}}` or `{"params": {"revoke": "<thread>"\|"*"}}` | `{"result": {"policy": {...}, "path": "...", "revoked": n}}` |
+| `policy` | `{"params": {}}` or `{"params": {"sandbox": "read-only"}}` or `{"params": {"provider": "...", "model": "..."}}` or `{"params": {"revoke": "<thread>"\|"*"}}` | `{"result": {"policy": {...}, "path": "...", "revoked": n}}` — `default_provider`/`default_model` fill turns that omit them |
 | `tools_refresh` | `{"id": 4}` | `{"result": {"loaded": [...], "tools": [...]}}` |
 | `cancel` | `{"params": {"thread_id": "..."}}` | `{"result": true}` + `cancelled` broadcast (kills tracked procs) |
 | `thread/resume` | `{"params": {"thread_id": "..."}}` | `{"result": {"thread_id", "source": "state"\|"audit"\|"new", "turns", "base", "history", "memories", "path"}}` |
