@@ -626,6 +626,9 @@ async def _execute_turn(
                                           extra_system)
         has_error = False
         round_text_parts: list[str] = []
+        # Output index where this round's deltas start (used to re-record
+        # cleaned text after tool-call scrubbing below).
+        round_mark = len(turn["output"])
 
         async for delta in stream_turn(provider, round_messages, model,
                                        images, api, stream):
@@ -691,20 +694,24 @@ async def _execute_turn(
         turn["tool_calls"] = tool_calls
         if tool_calls:
             # Hygiene: an executed call block is machine traffic, not chat.
-            # Scrub it from this round's recorded deltas AND the fold text
-            # so history, resume, and later rounds don't echo it. (Live
-            # deltas already streamed; clients render those as activity.)
+            # Scrub it from the JOINED round text (live chunks fragment the
+            # block, so per-entry regex never matches), then re-record this
+            # round's text as one clean entry. History, resume, and later
+            # folds stay clean. (Live deltas already streamed; clients
+            # render those as activity.)
             block_re = re.compile(r'```json\s*.*?\s*```', re.DOTALL)
-            for entry in turn["output"]:
-                if (isinstance(entry, dict)
-                        and entry.get("type") == "text_delta"
-                        and isinstance(entry.get("content"), str)):
-                    scrubbed, n = block_re.subn("", entry["content"], count=1)
-                    if n:
-                        entry["content"] = scrubbed.strip()
             stripped, n = block_re.subn("", round_text, count=1)
             if n:
                 round_text = stripped.strip()
+                turn["output"] = [
+                    e for i, e in enumerate(turn["output"])
+                    if i < round_mark or not (
+                        isinstance(e, dict)
+                        and e.get("type") == "text_delta")
+                ]
+                if round_text:
+                    turn["output"].append(
+                        {"type": "text_delta", "content": round_text})
 
         # Fallback, round 1 only: tool call from a "run " user message.
         if rnd == 1 and not tool_calls and user_msg.strip().lower().startswith("run "):
