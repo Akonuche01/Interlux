@@ -47,6 +47,7 @@ python3 -m agent.test_kara
 | `tools` | `{"id": n, "method": "tools"}` | `{"result": {"tools": [...], "client_tools": [...], "mcp_tools": [...]}}` |
 | `tools/register` | `{"params": {"name": "...", "description": "..."}}` | daemon calls the tool back out over your socket (`tool/call`) |
 | `tools/unregister` | `{"params": {"name": "..."}}` | owner-only removal |
+| `model/list` | `{"params": {"provider"?: "..."}}` (omit for all) | `{"result": {"provider", "default", "models": [{id, source}]}}` — config override > live `/models` > curated; never secrets |
 | `subagent/spawn` | `{"params": {"thread_id": "...", "message": "...", "provider"? , "max_rounds"?, "context"?}}` | `{"result": {"id", "thread_id", "parent", "status": "running"}}` — background turn on a child thread |
 | `subagent/status` | `{"params": {"id": "..."}}` | `{"result": {"id", "status", "thread_id", "parent"}}` |
 | `subagent/result` | `{"params": {"id": "..."}}` | `{"result": {"id", "status", "thread_id", "parent", "result"}}` |

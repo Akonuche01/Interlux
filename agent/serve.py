@@ -14,6 +14,7 @@ from .pconfig import (
     PROVIDER_NAME_RE,
     config_section,
     env_pinned,
+    list_models,
     make_provider,
     provider_config,
     public_section,
@@ -662,7 +663,7 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                         "turn", "cancel", "capabilities", "approve",
                         "tools_refresh", "tools", "tools/register",
                         "tools/unregister", "policy", "skills", "mcp",
-                        "providers", "turn/steer",
+                        "providers", "turn/steer", "model/list",
                         "thread/resume", "thread/fork", "thread/compact",
                         "thread/list", "thread/read", "memories",
                         "subagent/spawn", "subagent/status",
@@ -815,6 +816,25 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                 public_section(n, s) for n, s in sorted(provider_config().items())
                 if isinstance(s, dict)
             ]}}
+
+        if method == "model/list":
+            # Per-provider model enumeration: config override > live
+            # /models > curated fallback. Never carries secrets.
+            name = str(params.get("provider") or "")
+            if name:
+                if name not in PROVIDERS:
+                    return {
+                        "id": request_id,
+                        "error": {"code": -32602,
+                                 "message": f"unknown provider: {name}"},
+                    }
+                return {"id": request_id,
+                        "result": await list_models(name)}
+            results = await asyncio.gather(*[
+                list_models(p) for p in PROVIDERS
+            ])
+            return {"id": request_id, "result": {
+                "providers": {r["provider"]: r for r in results}}}
 
         if method == "tools/register":
             # M5: a client offers a tool the daemon calls back out to.

@@ -1,0 +1,60 @@
+#!/system/bin/sh
+# apt-compatible frontend over pkg.sh — Termux muscle memory.
+# Verbs: update install remove upgrade list search show
+# Flags (-y -q --yes ...) are accepted and ignored. Bionic packages only;
+# the Alpine guest keeps speaking apk (see pkginstall.sh).
+set -u
+case "$0" in
+  */*) U=$(dirname "$(dirname "$0")");;
+  *) U=/data/user/0/com.keneristudios.interlux/files/userland;;
+esac
+PKG="$U/pkg.sh"
+BB="$U/busybox"
+IDX="$U/var/lib/bionic/Packages"
+
+usage() {
+  echo "usage: apt update|install|remove|upgrade|list|search|show <pkgs...>" >&2
+  exit 1
+}
+
+# strip flags anywhere in the args; "$@" becomes positional args only
+noflags() {
+  out=""
+  for a in "$@"; do
+    case "$a" in -*) ;; *) out="$out $a";; esac
+  done
+  echo "$out"
+}
+
+[ $# -ge 1 ] || usage
+verb="$1"; shift
+set -- $(noflags "$@")
+
+case "$verb" in
+  update|install|remove|upgrade|list)
+    exec sh "$PKG" "$verb" "$@"
+    ;;
+  search)
+    [ $# -ge 1 ] || usage
+    [ -f "$IDX" ] || { echo "apt: no index, run: apt update" >&2; exit 1; }
+    pat="$1"
+    for p in $("$BB" grep -i "^Package: .*$pat" "$IDX" | "$BB" sed 's/^Package: //'); do
+      s=$("$BB" grep -A8 "^Package: $p\$" "$IDX" | "$BB" sed -n '1,/^$/p')
+      v=$(echo "$s" | "$BB" grep '^Version:' | "$BB" head -n1 | "$BB" sed 's/^Version: //')
+      echo "$p - $v"
+    done
+    ;;
+  show)
+    [ $# -ge 1 ] || usage
+    [ -f "$IDX" ] || { echo "apt: no index, run: apt update" >&2; exit 1; }
+    s=$("$BB" grep -A20 "^Package: $1\$" "$IDX" | "$BB" sed -n '1,/^$/p')
+    [ -n "$s" ] || { echo "apt: no such package: $1" >&2; exit 1; }
+    echo "$s"
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    usage
+    ;;
+esac

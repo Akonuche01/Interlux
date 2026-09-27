@@ -189,6 +189,14 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   guest, but JAX runner + musl engine wheel absent — the working path is
   the android-arm64 native binary (~/needle, 1.2MB) + needle3.cact (35MB):
   set_light(room=kitchen) correct, 301/124 tok/s, 75MB peak RAM.
+- Gap-closing 2026-09-26: `model/list` RPC (config override > live
+  /models > curated; gateway returned 62 live models, no secret leaks) +
+  `bin/apt` shim over pkg.sh (full lifecycle proven: update/search/show/
+  install/remove tree) + languages closed out (ruby 4.0.6, PHP 8.5.1, go
+  1.27.1, openjdk-17 javac+run, rust 1.98.1 native hello via
+  --sysroot/-L recipe; profile exports Go env + java PATH in Userland.kt;
+  GNU ar fixed via binutils). Open threads: RUSTFLAGS env ignored by this
+  rustc build (use command-line flags or cargo config).
 
 ## Notes
 - Interlux and Code Studio are SEPARATE apps.

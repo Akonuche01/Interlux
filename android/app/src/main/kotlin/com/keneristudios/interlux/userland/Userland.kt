@@ -261,6 +261,14 @@ object Userland {
             export PYTHONHOME="${dir.absolutePath}"
             export TERMINFO="${dir.absolutePath}/share/terminfo"
             export TERM="xterm-256color"
+            # Go: Termux-baked tmp paths are unwritable as app; keep build
+            # cache + module cache inside wipe-proof home (else `go run`
+            # fails creating its work dir). Java (openjdk-17) installs out
+            # of PATH by design; its bin joins PATH here (harmless if absent).
+            export GOTMPDIR="${dir.absolutePath}/home/.cache/go-build"
+            export GOCACHE="${dir.absolutePath}/home/.cache/go-build"
+            export GOPATH="${dir.absolutePath}/home/go"
+            export PATH="${dir.absolutePath}/lib/jvm/java-17-openjdk/bin:${'$'}PATH"
             # 3a TLS: Mozilla CA bundle so HTTPS (wget/curl/python) verifies.
             export SSL_CERT_FILE="${dir.absolutePath}/etc/ssl/certs/ca-certificates.crt"
             export CURL_CA_BUNDLE="${'$'}SSL_CERT_FILE"
