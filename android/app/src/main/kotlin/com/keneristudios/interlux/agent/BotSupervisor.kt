@@ -28,6 +28,7 @@ object BotSupervisor {
     val BOTS = listOf(
         Bot("forexmind", "/root/bots/forexmind/fxrun.sh"),
         Bot("marketmind", "/root/bots/marketmind/run.sh"),
+        Bot("degentrader", "/root/bots/degentrader/run.sh"),
     )
 
     private fun dir(context: Context): File {
@@ -45,9 +46,18 @@ object BotSupervisor {
         return File(dir(context), "bots.autostart")
     }
 
+    /** Legacy location (first migration wrote it beside the bots dir). */
+    private fun legacyAutostartFile(context: Context): File {
+        return File(File(context.filesDir, "userland/home"), ".interlux/agent/bots.autostart")
+    }
+
     fun autostartNames(context: Context): List<String> {
         return try {
-            autostartFile(context).takeIf { it.exists() }
+            // Prefer the legacy agent-level file when it exists (that is
+            // where the first migration wrote it); otherwise the bots dir.
+            val file = legacyAutostartFile(context).takeIf { it.exists() }
+                ?: autostartFile(context)
+            file.takeIf { it.exists() }
                 ?.readLines()?.map { it.trim() }
                 ?.filter { it.isNotEmpty() && !it.startsWith("#") }
                 ?: emptyList()
@@ -143,6 +153,17 @@ object BotSupervisor {
                     )
                     continue
                 }
+                // Skip bots whose runner was never staged (e.g. degentrader
+                // before its Termux export lands) instead of crash-looping.
+                if (!File(rootfs, bot.runner.removePrefix("/")).exists()) {
+                    BootTracer.step("bots: skip ${bot.name} (no ${bot.runner})")
+                    out[bot.name] = mapOf(
+                        "started" to false,
+                        "error" to "not staged: ${bot.runner}",
+                    )
+                    continue
+                }
+                BootTracer.step("bots: spawning ${bot.name} (${bot.runner})")
                 val pb = ProcessBuilder(
                     File(userland, "proot").absolutePath,
                     "-r", rootfs.absolutePath,
@@ -159,6 +180,10 @@ object BotSupervisor {
                 env["PROOT_LOADER_32"] =
                     "${userland.absolutePath}/libexec/proot/loader32"
                 env["PROOT_NO_SECCOMP"] = "1"
+                // Guest PATH: without this the runner's `python3` resolves
+                // against the host (Android) PATH and is never found.
+                env["PATH"] =
+                    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
                 pb.directory(File(userland, "home"))
                 pb.redirectOutput(
                     ProcessBuilder.Redirect.appendTo(
@@ -227,7 +252,9 @@ object BotSupervisor {
      */
     fun ensureRestart(context: Context) {
         val appContext = context.applicationContext
-        for (name in autostartNames(appContext)) {
+        val names = autostartNames(appContext)
+        BootTracer.step("bots: ensureRestart autostart=[${names.joinToString(",")}]")
+        for (name in names) {
             try {
                 if (!isRunning(appContext, name)) {
                     BootTracer.step("bots: watchdog restarting $name")
