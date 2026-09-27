@@ -189,13 +189,20 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   history (fail/overwrite/append) from e.g. codex thread/read output;
   imported history reaches providers like native history. Device proof
   5/5 E2E.
-- Kara adapter BUILT in her repo (Desktop/kara, no git there): EngineClient
+- Kara adapter BUILT in her repo (Desktop/kara, local git): EngineClient
   interface, IagentClient translator (URL-switched, both engines alive),
   config repoints to Interlux paths. Her 500 tests pass; 11 new adapter
   tests pass; LIVE test (real socket → device daemon: handshake, thread
   with tool registration, turn, timeline decode, list) passes in 5s.
   Daemon side: policy default_provider/default_model (device set to
   tokenharbor/deepseek-v4.1-flash:free) so keyless turns work.
+- Kara bots MOVED (2026-09-27): forexmind+marketmind staged to guest
+  /root/bots (shebangs fixed, deps ccxt/numpy/requests, both byte-compile;
+  forex runs a FULL live cycle: fundamentals, 7 pairs scored). marketmind
+  needs her agent to restore analytics/patterns.py (missing upstream file,
+  caller technical.py:216). Supervision: BotSupervisor + BotWatchdog +
+  control actions in Interlux (gradle-verified); her Termux bots alarm
+  retired. Cutover needs both APKs installed (same release key!).
 - Kara move part 2 (in her repo): config/read+batchWrite mapped to
   policy/providers (16 adapter tests green), skills/list mapped, full
   505-test suite green. Her bots are Python (forexmind/marketmind) —
