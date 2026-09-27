@@ -103,6 +103,35 @@ def public_section(name: str, section: dict) -> dict:
     }
 
 
+# Non-provider sections of the provider config: tool configuration that has
+# to survive a restart and stay readable by the tool that honours it.
+# `web_search` is addressed by name over the wire (serve.py: `config/section`)
+# because this daemon has no `config/read` -- and inventing a general one to
+# carry a single section would be a second config system standing next to
+# this file.
+CONFIG_SECTIONS = ("web_search",)
+
+# The modes the `web_search` section accepts. The client's WebSearchMode
+# enum also carries `cached`; there is no cache here, so it is refused at
+# the boundary rather than stored and ignored -- a setting that silently
+# does nothing is how a feature dies.
+WEB_SEARCH_MODES = ("disabled", "live")
+
+
+def public_config_section(name: str, section: dict) -> dict:
+    """Wire-safe view of a tool section (secrets never leave the daemon)."""
+    key = str(section.get("api_key", "") or "")
+    # Absent mode means live, so a fresh install searches before anyone opens
+    # Capabilities and the read reports what the tool will actually do.
+    return {
+        "name": name,
+        "mode": str(section.get("mode", "live") or "live"),
+        "base_url": str(section.get("base_url", "") or ""),
+        "has_key": bool(key),
+        "key_hint": mask_key(key),
+    }
+
+
 def read_providers_file() -> dict:
     try:
         if config_file_path().exists():

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -12,12 +13,15 @@ from typing import AsyncIterator
 from .audit import AuditLog
 from . import mcp as mcp_mod
 from .pconfig import (
+    CONFIG_SECTIONS,
     PROVIDER_NAME_RE,
+    WEB_SEARCH_MODES,
     config_section,
     env_pinned,
     list_models,
     make_provider,
     provider_config,
+    public_config_section,
     public_section,
     read_providers_file,
     write_providers_file,
@@ -36,6 +40,7 @@ from .policy import (
 )
 from .providers import PROVIDERS, BaseProvider
 from .skills import (
+    catalog_message as skills_catalog,
     get_skill as skills_get,
     list_skills as skills_list,
     refresh as skills_refresh,
@@ -45,6 +50,7 @@ from .skills import (
     USER_DIR as SKILLS_USER_DIR,
 )
 from .threads import (
+    DEFAULT_IDENTITY,
     archive_thread,
     build_messages,
     fold_output,
@@ -363,6 +369,89 @@ def _tool_output_status(output: dict) -> str:
     return str(output.get("status", "error"))
 
 
+def agency_messages() -> list[dict]:
+    """System prompt that makes the model agentic: tool catalog + calling
+    convention. Without this the model never emits tool calls (it was never
+    told the tools exist), which is exactly how Kara lost her agency on the
+    iagent move — Codex shipped this prompt engine-side, iagent did not.
+
+    NOTE: OpenAI-compatible providers here are single-message (only the
+    last user message goes on the wire), so this must ALSO ride inside
+    the user content via preamble_text() — system roles alone never
+    reach the model.
+    """
+    return [{"role": "system", "content": agency_text()}]
+
+
+def agency_text() -> str:
+    from .tools import WRITE_TOOLS
+    lines = [
+        "You are an AGENT with tools. To act, emit a fenced json block:",
+        '```json [{"tool": "<name>", "parameters": {...}}] ```',
+        "Rules:",
+        "- You may call several tools in one block; they run in order.",
+        "- Tool results return to you next round — use them, then answer.",
+        "- NEVER claim a tool ran unless you received its tool_result.",
+        "- For live/external facts use web_search; your weights may be stale.",
+        "- Read a file before editing it; prefer exact-match fs_edit.",
+        "- Write tools (marked APPROVAL) pause for the user's approval — "
+        "propose them, do not work around the pause.",
+        "Your tools:",
+    ]
+    for name in sorted(TOOLS):
+        if name in _client_tools:
+            spec = _client_tools[name]
+            desc = str(spec.get("description", ""))
+            schema = spec.get("inputSchema") or {}
+            props = schema.get("properties") if isinstance(schema, dict) else None
+            params = ", ".join(sorted(props)) if isinstance(props, dict) else "..."
+            lines.append(f"- {name}({params}) [app tool, APPROVAL]: {desc[:160]}")
+            continue
+        fn = TOOLS[name]
+        try:
+            sig = inspect.signature(fn)
+            params = ", ".join(
+                p for p in sig.parameters if p not in ("self", "cls")
+            )
+        except (TypeError, ValueError):
+            params = "..."
+        doc = (inspect.getdoc(fn) or "").splitlines()
+        brief = doc[0] if doc else ""
+        tag = " [APPROVAL]" if name in WRITE_TOOLS else ""
+        lines.append(f"- {name}({params}){tag}: {brief[:160]}")
+    try:
+        mcp_names = mcp_mod.describe().get("registered_tools", []) or []
+    except Exception:
+        mcp_names = []
+    if mcp_names:
+        lines.append("MCP tools: " + ", ".join(sorted(str(t) for t in mcp_names)))
+    # Skill catalog rides the preamble too: single-message providers drop
+    # system roles, so the skill_messages system injection never reaches
+    # the wire - without this the model cannot use any skill.
+    try:
+        catalog = skills_catalog()
+    except Exception:
+        catalog = ''
+    if catalog:
+        lines.append(catalog)
+    lines.append(
+        "Answer in the user's language, concisely. Plain text plus tool "
+        "blocks only. Never echo a tool block back: after tools run, "
+        "answer with the RESULT in your own words."
+    )
+    return "\n".join(lines)
+
+
+def preamble_text(state: dict) -> str:
+    """Identity + agency prompt as plain text, prepended to the user's
+    message. Providers here are single-message (system roles never reach
+    the wire), so without this the model would never see who it is or
+    what tools it has.
+    """
+    developer = (state.get("developer") or "").strip()
+    return f"{developer or DEFAULT_IDENTITY}\n\n{agency_text()}"
+
+
 async def run_tool_loop(turn: dict, client_socket) -> None:
     """Execute tool calls with approval flow."""
     tool_calls = turn.get("tool_calls", [])
@@ -539,7 +628,10 @@ async def _execute_turn(
         max_rounds = 1
     max_rounds = max(1, min(max_rounds, 10))
 
-    working_content = user_msg
+    # Single-message providers only ever see the last user message, so the
+    # identity + tool prompt must ride INSIDE it (system roles are built
+    # too, for providers that honor them, but they never reach this wire).
+    working_content = preamble_text(state) + "\n\n---\n\n" + user_msg
     while True:
         turn["rounds"] += 1
         rnd = turn["rounds"]
@@ -547,6 +639,9 @@ async def _execute_turn(
                                           extra_system)
         has_error = False
         round_text_parts: list[str] = []
+        # Output index where this round's deltas start (used to re-record
+        # cleaned text after tool-call scrubbing below).
+        round_mark = len(turn["output"])
 
         async for delta in stream_turn(provider, round_messages, model,
                                        images, api, stream):
@@ -610,6 +705,26 @@ async def _execute_turn(
                 if not isinstance(tool_calls, list):
                     tool_calls = []
         turn["tool_calls"] = tool_calls
+        if tool_calls:
+            # Hygiene: an executed call block is machine traffic, not chat.
+            # Scrub it from the JOINED round text (live chunks fragment the
+            # block, so per-entry regex never matches), then re-record this
+            # round's text as one clean entry. History, resume, and later
+            # folds stay clean. (Live deltas already streamed; clients
+            # render those as activity.)
+            block_re = re.compile(r'```json\s*.*?\s*```', re.DOTALL)
+            stripped, n = block_re.subn("", round_text, count=1)
+            if n:
+                round_text = stripped.strip()
+                turn["output"] = [
+                    e for i, e in enumerate(turn["output"])
+                    if i < round_mark or not (
+                        isinstance(e, dict)
+                        and e.get("type") == "text_delta")
+                ]
+                if round_text:
+                    turn["output"].append(
+                        {"type": "text_delta", "content": round_text})
 
         # Fallback, round 1 only: tool call from a "run " user message.
         if rnd == 1 and not tool_calls and user_msg.strip().lower().startswith("run "):
@@ -727,11 +842,12 @@ async def handle_turn(payload: dict, client_socket) -> dict:
     sandbox_token = sandbox_ctx.set(sandbox)
     try:
         # Epic D: skill catalog (+ requested bodies) ride as system messages
-        # inside build_messages, rebuilt every Epic J round.
+        # inside build_messages, rebuilt every Epic J round. The agency
+        # prompt (tools + calling convention) rides in front of them.
         return await _execute_turn(
             payload, params, user_msg, provider, model,
             thread_id, turn, client_socket, state,
-            skill_messages(params.get("skills")),
+            agency_messages() + skill_messages(params.get("skills")),
         )
     except asyncio.CancelledError:
         kill_turn(turn["id"])
@@ -783,7 +899,8 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                         "initialize", "command/exec",
                         "tools_refresh", "tools", "tools/register",
                         "tools/unregister", "policy", "skills", "mcp",
-                        "providers", "turn/steer", "model/list",
+                        "providers", "config/section", "turn/steer",
+                        "model/list",
                         "thread/resume", "thread/fork", "thread/compact",
                         "thread/list", "thread/read", "thread/archive",
                         "thread/unarchive", "thread/unsubscribe",
@@ -886,6 +1003,16 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
             if isinstance(params.get("model"), str) and params["model"].strip():
                 policy["default_model"] = params["model"].strip()
                 changed = True
+            # Kara move: her approval_policy ("never" default) maps here so
+            # the daemon auto-grants instead of stalling on cards nobody
+            # answers. Anything else clears back to ask-everything.
+            if "approval_mode" in params:
+                mode = str(params.get("approval_mode") or "").strip()
+                if mode == "never":
+                    policy["approval_mode"] = "never"
+                else:
+                    policy.pop("approval_mode", None)
+                changed = True
             if "revoke" in params:
                 revoked = revoke(policy, str(params["revoke"]))
                 changed = True
@@ -940,10 +1067,71 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
             if name:
                 return {"id": request_id, "result": public_section(
                     name, config_section(name))}
-            return {"id": request_id, "result": {"providers": [
-                public_section(n, s) for n, s in sorted(provider_config().items())
-                if isinstance(s, dict)
-            ]}}
+            # Union of known adapters + configured sections: every provider
+            # the daemon can serve gets a block (keyless ones show
+            # has_key=false with the default base_url) so clients can
+            # display, save keys for, and switch to all of them. Kara's
+            # settings + model picker broke on iagent because only
+            # configured sections were listed (just tokenharbor).
+            from .pconfig import DEFAULT_BASES
+            seen = provider_config()
+            names = sorted(
+                set(PROVIDERS)
+                | {k for k, v in seen.items() if isinstance(v, dict)}
+            )
+            out = []
+            for n in names:
+                section = seen.get(n)
+                if not isinstance(section, dict):
+                    section = {}
+                else:
+                    section = dict(section)
+                section.setdefault("base_url", DEFAULT_BASES.get(n, ""))
+                out.append(public_section(n, section))
+            return {"id": request_id, "result": {"providers": out}}
+
+        if method == "config/section":
+            # One non-provider section of the provider config -- today only
+            # `web_search`. There is no `config/read` on this daemon, so the
+            # section is addressed on its own terms; wrapping it in a method
+            # name that implies a general config system would be the lie.
+            # Writes copy `providers` exactly: refuse when env-pinned, audit
+            # what changed, atomic replace.
+            name = str(params.get("name") or "")
+            if name not in CONFIG_SECTIONS:
+                return {"id": request_id, "error": {"code": -32602,
+                        "message": (f"unknown config section: "
+                                    f"{name or '(empty)'} (known: "
+                                    f"{', '.join(CONFIG_SECTIONS)})")}}
+            if "set" in params:
+                if env_pinned():
+                    return {"id": request_id, "error": {"code": -32602, "message": (
+                            "config is env-pinned (INTERLUX_PROVIDERS); "
+                            "file write refused")}}
+                patch = params["set"]
+                if not isinstance(patch, dict):
+                    return {"id": request_id, "error": {"code": -32602,
+                            "message": "set must be an object"}}
+                unknown = sorted(k for k in patch if k != "mode")
+                if unknown:
+                    return {"id": request_id, "error": {"code": -32602,
+                            "message": f"unmapped config key: {unknown[0]}"}}
+                mode = str(patch.get("mode", "live") or "live").strip().lower()
+                if mode not in WEB_SEARCH_MODES:
+                    return {"id": request_id, "error": {"code": -32602,
+                            "message": (f"bad web_search mode: {mode!r} "
+                                        f"(one of {', '.join(WEB_SEARCH_MODES)})")}}
+                data = read_providers_file()
+                section = data.setdefault("web_search", {})
+                if not isinstance(section, dict):
+                    section = data["web_search"] = {}
+                section["mode"] = mode
+                write_providers_file(data)
+                audit.append({"type": "config_section",
+                              "section": "web_search", "mode": mode})
+                logger.info(f"web_search section mode set to {mode}")
+            return {"id": request_id, "result": public_config_section(
+                "web_search", config_section("web_search"))}
 
         if method == "model/list":
             # Per-provider model enumeration: config override > live
@@ -1186,6 +1374,18 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                     "error": {"code": -32602, "message": "thread_id required"},
                 }
             state, source = materialize_state(tid)
+            # Kara move: thread/start carries developerInstructions (persona)
+            # and the adapter forwards them here; persist so every later
+            # turn (and resume/fork) injects them as system messages.
+            dev = params.get("developer_instructions")
+            if isinstance(dev, str) and dev.strip():
+                dev = dev.strip()[:4000]
+                if state.get("developer") != dev:
+                    state["developer"] = dev
+                    try:
+                        save_state(state)
+                    except Exception:
+                        logger.exception("failed to persist developer prompt")
             return {
                 "id": request_id,
                 "result": {

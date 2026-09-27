@@ -26,6 +26,15 @@ AUDIT_FILE = CONFIG_DIR / "audit.jsonl"
 _ASSISTANT_CAP = 40_000
 _TOOL_LINE_CAP = 2_000
 
+# Fallback identity injected as the first system message when a thread
+# carries no client developer instructions. Without any identity prompt the
+# model answers "who are you" from its own weights (Qwen says Qwen,
+# DeepSeek says DeepSeek) — the Kara identity leak of 2026-09-27.
+DEFAULT_IDENTITY = (
+    "You are Kara, the on-device AI agent. When the user speaks to you, "
+    "you are Kara; own the name and answer as Kara."
+)
+
 
 def _safe(thread_id: str) -> str:
     # Strict slug: letters/digits/_/- only (no dots, no separators) so a
@@ -52,6 +61,7 @@ def new_state(thread_id: str, parent: str | None = None) -> dict:
         "turns": 0,
         "base": "",
         "name": "",
+        "developer": "",
         "history": [],
         "parent": parent,
         "created": ts,
@@ -70,6 +80,7 @@ def load_state(thread_id: str) -> dict | None:
         state.setdefault("history", [])
         state.setdefault("base", "")
         state.setdefault("name", "")
+        state.setdefault("developer", "")
         state.setdefault("turns", 0)
         return state
     except Exception:
@@ -112,6 +123,14 @@ def build_messages(
 ) -> list[dict]:
     """base summary -> client notes -> extra system (skills) -> history -> user."""
     msgs: list[dict] = []
+    # Identity first: the thread's developer instructions (e.g. Kara's
+    # persona from thread/start), else the daemon default. Without this the
+    # model self-identifies from its weights on "who are you".
+    developer = (state.get("developer") or "").strip()
+    msgs.append({
+        "role": "system",
+        "content": developer or DEFAULT_IDENTITY,
+    })
     base = state.get("base", "")
     if base:
         msgs.append({
@@ -197,6 +216,7 @@ def fork_state(from_id: str, to_id: str) -> dict:
         raise FileNotFoundError(f"no state or audit history for {from_id!r}")
     dst = new_state(to_id, parent=from_id)
     dst["base"] = src.get("base", "")
+    dst["developer"] = src.get("developer", "")
     dst["history"] = [dict(m) for m in src.get("history", [])]
     dst["turns"] = 0
     save_state(dst)

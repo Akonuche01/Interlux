@@ -111,7 +111,17 @@ object Userland {
      //   fixed-string match + v2.7 once-per-run index cache.
      // v41 (proof honesty): proof tolerates per-tool failure; nmap loopback
      //   documented as proot-blocked (binary + NSE count is the pass).
-     private const val VERSION = "full-tools-35"
+     // v36 through v41 were written up here but never made it into the constant
+    // below, so every device's marker still read "full-tools-35" and six
+    // changelog entries never forced a re-extract. That is why the bundled
+    // daemon could be stale for weeks with no signal that anything was wrong.
+    // v42 (daemon code sync): the bundled `agent/` had drifted from the repo
+    //   copy. `config/section` (the real web_search section), `approval_mode`
+    //   never, and DEFAULT_IDENTITY (the Kara identity leak of 2026-09-27) were
+    //   all still running the older code on device. Assets synced, marker
+    //   bumped so this takes effect. wipeExceptHome keeps home/, so
+    //   providers.json and the API key survive the re-extract.
+    private const val VERSION = "full-tools-42"
     private const val ASSET_DIR = "userland"
     private const val DIR_NAME = "userland"
 
