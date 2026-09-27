@@ -189,6 +189,27 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   history (fail/overwrite/append) from e.g. codex thread/read output;
   imported history reaches providers like native history. Device proof
   5/5 E2E.
+- Bot migration IN PROGRESS (boss: move ALL bots to our engine; third
+  bot = degen trader). Supervision FIXED and device-PROVEN: BotSupervisor
+  reads the legacy agent-level bots.autostart, sets guest PATH, skips
+  unstaged runners, logs every step; cold boot spawned forexmind (brain
+  `python3 fxmain.py` up) + marketmind, pid files + proot trees verified,
+  watchdog tick idempotent. forexmind fully migrated. marketmind BLOCKED
+  on analytics/patterns.py (still missing — needs Termux export). degen
+  trader SOURCES MISSING (only in Termux ~/projects, unreadable from our
+  uid — needs Termux export to /sdcard). Nothing running anywhere right
+  now except our forexmind (+marketmind crash-looping till patterns.py
+  lands). User must confirm Termux:Boot won't revive originals.
+- Batch batch-2 SHIPPED (keys/models/approvals/skills/wakelock):
+  providers RPC seeds blocks for every known adapter (openai/anthropic/
+  inception/tokenharbor/local) with default base_urls — settings shows
+  them, keys save, local model pickable via node roster; skill catalog
+  appended to the preamble (system-role injection never reaches the
+  single-message wire); policy approval_mode=never auto-grants (her
+  NeverAsk now honored daemon-side; device policy set); adapter sends
+  per-turn model (mid-chat switches work) + forwards approval_policy
+  (18/18 adapter tests, 51/51 session tests); her wake-lock call is an
+  iagent no-op (was Termux EACCES spam). Both APKs rebuilt+installed.
 - Kara identity+agency RESTORED 2026-09-27 (boss: she called herself
   Qwen, then DeepSeek, then a tool-less chatbot). Root causes, all on the
   iagent side of the move: (1) daemon had NO base/identity prompt (Codex
