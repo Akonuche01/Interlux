@@ -7,14 +7,39 @@ then the bundled agent/providers.json. Sections (providers, web_search,
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
 import re
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from .providers import PROVIDERS, BaseProvider
 
+logger = logging.getLogger("pconfig")
+
 PROVIDER_NAME_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+# Mirrors of the provider adapters' defaults (fallback when live
+# discovery is impossible and no config override exists).
+CURATED_MODELS = {
+    "openai": ["gpt-4o"],
+    "anthropic": ["claude-3-5-sonnet-20241022"],
+    "inception": ["mercury-2.5"],
+    "tokenharbor": ["deepseek-v4.1-flash:free"],
+    "local": ["local"],
+}
+DEFAULT_BASES = {
+    "openai": "https://api.openai.com/v1",
+    "anthropic": "https://api.anthropic.com/v1",
+    "inception": "https://api.inceptionlabs.ai/v1",
+    "tokenharbor": "https://tokenharbor.ai/v1",
+    "local": "http://127.0.0.1:4602/v1",
+}
+# Providers whose API shape exposes GET /models (OpenAI-compatible).
+LIVE_MODELS_OK = {"openai", "tokenharbor", "local", "inception"}
 
 
 def config_file_path() -> Path:
@@ -96,6 +121,53 @@ def write_providers_file(data: dict) -> Path:
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1))
     tmp.replace(path)
     return path
+
+
+def _fetch_model_ids(base_url: str, api_key: str,
+                     timeout: int = 15) -> list[str] | None:
+    """Blocking GET {base}/models (runs in an executor). None when unusable."""
+    req = urllib.request.Request(
+        base_url.rstrip("/") + "/models",
+        headers={"Authorization": f"Bearer {api_key}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8", errors="replace"))
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError) as e:
+        logger.info(f"live model discovery failed: {e}")
+        return None
+    items = data.get("data", []) if isinstance(data, dict) else []
+    ids = sorted({str(x.get("id")) for x in items
+                  if isinstance(x, dict) and x.get("id")})
+    return ids or None
+
+
+async def list_models(name: str) -> dict:
+    """Models for a provider: config override > live /models > curated.
+
+    Never includes secrets. Raises ValueError for unknown providers.
+    """
+    if name not in PROVIDERS:
+        raise ValueError(f"unknown provider: {name}")
+    section = config_section(name)
+    override = section.get("models")
+    if isinstance(override, list) and override:
+        ids = [str(m) for m in override if str(m).strip()]
+        if ids:
+            return {"provider": name, "default": ids[0],
+                    "models": [{"id": m, "source": "config"} for m in ids]}
+    if name in LIVE_MODELS_OK:
+        base = str(section.get("base_url", "") or DEFAULT_BASES.get(name, ""))
+        key = str(section.get("api_key", "") or "")
+        if base and key:
+            ids = await asyncio.to_thread(_fetch_model_ids, base, key)
+            if ids:
+                return {"provider": name, "default": ids[0],
+                        "models": [{"id": m, "source": "live"} for m in ids]}
+    curated = list(CURATED_MODELS.get(name, []))
+    return {"provider": name, "default": (curated[0] if curated else ""),
+            "models": [{"id": m, "source": "curated"} for m in curated]}
 
 
 def load_provider(name: str, config: dict) -> BaseProvider | None:
