@@ -146,11 +146,23 @@ Termux-baked shebangs rewritten at extract, and OPENSSL_CONF=/dev/null
     Alpine's D: line only lists perl/nmap/openssl), hydra 9.6 RUNS (99-pkg
     dep closure: afpfs-ng, freerdp-libs, samba-libs, mariadb-connector-c,
     libpq, subversion-libs, mongo-c-driver, libmemcached, apr, libgcrypt,
-    libssh), ffuf, john 1.9-jumbo, tcpdump. pkginstall v2.9: do_resolve is
+    libssh), ffuf, john 1.9-jumbo, tcpdump.     pkginstall v2.9: do_resolve is
     a single awk pass over the index (old per-lookup 13MB cat|grep took
     ~1s each; hydra's deep tree blew past 20 min).
-    PENDING: OSINT phase (sherlock, maigret, holehe, h8mail, theHarvester);
-    pwntools attempt with Kara's psutil/PyNaCl patches.
+    DONE 2026-09-27 (Epic L): OSINT phase — sqlmap 1.10.9 (git source),
+    sherlock 0.16.2, maigret 0.6.6, holehe, h8mail (all run); theHarvester
+    5.0.0 from git source (PyPI 0.0.1 is a fossil; playwright stubbed —
+    no musl wheels, screenshot sources unavailable; MUST run `-u` and via
+    direct entry_point(), `-m` is silently dead upstream); pwntools imports
+    + ELF/pack proven (unicorn 2.1.4 musl wheels kept; pinned older unicorn
+    unbuildable — no cmake-capable compiler path under proot apk).
+    One-tap recon: /root/recon.sh (nmap --unprivileged -sT + crtsh harvest
+    → timestamped FINDINGS.md + /root/.scan-history.jsonl), proven on
+    scanme.nmap.org (22+80 open, honest negative harvest). Findings =
+    markdown next to raw outputs. Rootless learning: nmap needs
+    --unprivileged (raw route detection fails); apk can't write system
+    paths under proot (use pkginstall.sh / --no-cache userland paths).
+    PENDING: PDF export.
 16. [ ] Modern terminal UX Termux never got: tabs (done), extra keys (done),
     searchable scrollback (done: find + highlight + counter + prev/next,
     unit-tested, screenshot-proven; no auto-scroll yet), split panes (REMOVED

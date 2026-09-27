@@ -197,6 +197,13 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   --sysroot/-L recipe; profile exports Go env + java PATH in Userland.kt;
   GNU ar fixed via binutils). Open threads: RUSTFLAGS env ignored by this
   rustc build (use command-line flags or cargo config).
+- Epic L SHIPPED (pentest depth): sqlmap 1.10.9, sherlock 0.16.2, maigret
+  0.6.6, holehe, h8mail, theHarvester 5.0.0 (git source + playwright stub +
+  `-u` + entry_point recipe), pwntools (ELF/pack proven; unicorn 2.1.4 kept,
+  pinned build unbuildable) — all run in guest. recon.sh one-tap flow
+  (nmap --unprivileged -sT + crtsh → FINDINGS.md + .scan-history.jsonl)
+  proven on scanme.nmap.org (22/80 open). osint skill ships the recipes.
+  Open: PDF export.
 
 ## Notes
 - Interlux and Code Studio are SEPARATE apps.
