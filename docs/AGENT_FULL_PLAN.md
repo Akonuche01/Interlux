@@ -139,8 +139,8 @@ MCP client (`mcp_<server>__<tool>`), per-turn providers, sandboxes, audit.
 | J | Autonomous multi-step turn loop (model↔tools, bounded) | SHIPPED (max_rounds, fold-per-round, cap 10, rounds in result/audit) |
 | P | Subagents (parallel background turns on child threads) | SHIPPED (spawn/status/result/list/cancel, fork context, per-thread approvals, cap 8) |
 | Q | MCP remote servers (streamable HTTP + header auth) | SHIPPED (JSON/SSE replies, session stickiness, loud failures; OAuth deferred app-side) |
-| K | Terminal tails: Termux:API CLI shims, URL-tap cert, font/theme packs, scrollback auto-scroll, libselinux tidy | app-side, slower loop |
+| K | Terminal tails: Termux:API CLI shims, URL-tap cert, font/theme packs, scrollback auto-scroll, libselinux tidy | apt shim SHIPPED; rest open |
 | L | Pentest depth: OSINT set, pwntools, one-tap recipes, findings export, scan history | guest + app |
-| M | Package depth: Perl/Ruby tail, rust/openjdk, Debian/Kali tarballs, APKINDEX SIGN | guest + userland |
+| M | Package depth: Perl/Ruby tail, rust/openjdk, Debian/Kali tarballs, APKINDEX SIGN | ruby/php/go/java/rust SHIPPED + proven; tail/tarballs/SIGN open |
 | N | Perf/distribution: lazy modules, cold-start budget, signed update channel | app-side |
 | O | X11/GUI via guest VNC server + in-app viewer | largest, last |
