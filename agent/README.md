@@ -253,13 +253,19 @@ Notifications:
   threads error; steering a live history-less thread works.
 - Client tools: `tools/register` offers a tool the daemon calls back out
   to over your socket (`{"method": "item/tool/call", "params": {"tool",
-  "arguments"}}` — the Codex wire shape, so Kara's dispatcher fires
-  unchanged — → reply `{"id", "result"}` with a `DynamicToolCallResponse`
-  (`{contentItems, success}`) or any dict). Ask-first approval,
-  audited, 30s timeout; dead owners fail loudly and auto-unregister;
-  `tools/unregister` is owner-only; `tools` lists the registry split by
-  origin (all / client+specs / mcp). Registration accepts an optional
-  `inputSchema` passthrough.
+  "arguments", "callId", "threadId", "turnId}}` — the Codex wire shape, so
+  Kara's dispatcher fires unchanged — → reply `{"id", "result"}` with a
+  `DynamicToolCallResponse` (`{contentItems, success}`) or any dict).
+  Ask-first approval, audited, 30s timeout; dead owners fail loudly and
+  auto-unregister; `tools/unregister` is owner-only; `tools` lists the
+  registry split by origin (all / client+specs / mcp). Registration
+  accepts an optional `inputSchema` passthrough.
+- `approve` understands plain words (`allow`, `deny`, …), our
+  `{decision, scope}` params, and Kara/Codex literals (`accept` once,
+  `acceptForSession` always, `decline`; amendment objects degrade to a
+  logged one-shot allow). Approval answers may also arrive as method-less
+  `{id, result}` frames (her client answers that way); unknown strings
+  deny (fail closed).
 
 ## Subagents (Epic P)
 

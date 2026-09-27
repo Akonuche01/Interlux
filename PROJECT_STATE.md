@@ -189,6 +189,11 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   history (fail/overwrite/append) from e.g. codex thread/read output;
   imported history reaches providers like native history. Device proof
   5/5 E2E.
+- Kara wire alignment SHIPPED (read her protocol lib): item/tool/call
+  carries full DynamicToolCallParams (tool+arguments+callId+threadId+
+  turnId); approve() speaks Kara/Codex literals incl. acceptForSession→
+  session grants and amendment degrade; approval answers routable as
+  method-less frames; turn_id in approval requests. Device proof 16/16.
 - Restart surface CODE SHIPPED (Kotlin compile + manifest merge green):
   exported AgentControl service (START/STOP/RESTART/STATUS + result
   PendingIntent) under signature-level CONTROL_AGENT permission; device

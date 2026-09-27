@@ -114,6 +114,45 @@ logger = logging.getLogger("iagent")
 audit = AuditLog()
 
 
+_APPROVE_ALLOW_WORDS = {
+    "approve", "accept", "allow", "yes", "always", "true",
+    "acceptforsession",
+}
+_APPROVE_SESSION_WORDS = {"session", "always", "acceptforsession"}
+_APPROVE_DENY_WORDS = {"deny", "decline", "refuse", "no", "false"}
+
+
+def _parse_approval_decision(decision, scope: str = "turn") -> tuple[bool, str]:
+    """(granted, grant_scope) from any client decision shape.
+
+    Understands our plain words, our {decision, scope} RPC params, and
+    Kara/Codex decision literals: accept (once), acceptForSession (always),
+    decline, plus amendment objects (one-shot allow — persistent policy
+    amendments have no home here, so they degrade loudly to a single allow
+    in the daemon log, never silently).
+    """
+    if isinstance(decision, dict):
+        text = json.dumps(decision).lower()
+        if "decline" in text or "deny" in text:
+            return False, "turn"
+        if "acceptforsession" in text:
+            return True, "session"
+        if "amendment" in text:
+            logger.info("policy-amendment accept degraded to one-shot allow")
+        return True, "turn"
+    word = str(decision or "").strip().lower()
+    if word in _APPROVE_DENY_WORDS or "decline" in word or "deny" in word:
+        return False, "turn"
+    if word in _APPROVE_ALLOW_WORDS or scope == "session":
+        # "always"/acceptForSession mean session scope even when the
+        # caller left scope at its default (matches Kara's Always allow).
+        if word in _APPROVE_SESSION_WORDS or scope == "session" \
+                or "session" in word:
+            return True, "session"
+        return True, "turn"
+    return False, "turn"
+
+
 class ApprovalManager:
     def __init__(self):
         # fid -> {"future", "thread", "tool", "label"}
@@ -132,15 +171,13 @@ class ApprovalManager:
         self.pending[fid] = entry
         return entry["future"]
 
-    def approve(self, fid: str, decision: str, scope: str = "turn") -> bool:
+    def approve(self, fid: str, decision, scope: str = "turn") -> bool:
         entry = self.pending.pop(fid, None)
         if entry is None:
             return False
-        granted = str(decision or "").strip().lower() in (
-            "approve", "accept", "allow", "yes", "always", "true",
-        )
+        granted, grant_scope = _parse_approval_decision(decision, scope)
         entry["future"].set_result(granted)
-        if granted and scope == "session" and entry.get("tool"):
+        if granted and grant_scope == "session" and entry.get("tool"):
             try:
                 policy = load_policy()
                 what = record_grant(
@@ -267,8 +304,14 @@ def _normalize_client_result(res, name: str) -> dict:
     return {"status": "success", "output": res}
 
 
-async def _call_client_tool(name: str, arguments: dict) -> dict:
-    """Execute a client tool via its owner socket. Loud on every failure."""
+async def _call_client_tool(name: str, arguments: dict, thread_id: str = "",
+                         turn_id: str = "", call_id: str = "") -> dict:
+    """Execute a client tool via its owner socket. Loud on every failure.
+
+    The request frame carries the full Codex DynamicToolCallParams shape
+    (tool, arguments, callId, threadId, turnId) so Kara's dispatcher fires
+    unchanged.
+    """
     global _tool_call_seq
     entry = _client_tools.get(name)
     if entry is None:
@@ -283,7 +326,9 @@ async def _call_client_tool(name: str, arguments: dict) -> dict:
     try:
         await send_to(entry["owner"], {
             "id": fid, "method": CLIENT_TOOL_CALL_METHOD,
-            "params": {"tool": name, "arguments": arguments or {}},
+            "params": {"tool": name, "arguments": arguments or {},
+                       "callId": call_id or str(fid),
+                       "threadId": thread_id, "turnId": turn_id},
         })
     except Exception as e:
         _client_tools.pop(name, None)
@@ -385,7 +430,8 @@ async def run_tool_loop(turn: dict, client_socket) -> None:
             else:
                 fid = f"{thread_id}:{len(approvals.pending)}"
                 approval_params = {"command": label, "id": fid,
-                                   "tool": tool_name}
+                                   "tool": tool_name,
+                                   "turn_id": str(turn.get("id", ""))}
                 if isinstance(params, dict) and params.get("path"):
                     approval_params["path"] = str(params["path"])[:500]
 
@@ -413,7 +459,12 @@ async def run_tool_loop(turn: dict, client_socket) -> None:
         logger.info(f"Executing tool: {tool_name}")
         if tool_name in TOOLS:
             try:
-                result = await TOOLS[tool_name](**params)
+                if tool_name in _client_tools:
+                    result = await _call_client_tool(
+                        tool_name, params, thread_id=thread_id,
+                        turn_id=str(turn.get("id", "")), call_id=item_id)
+                else:
+                    result = await TOOLS[tool_name](**params)
                 logger.info(f"Tool result: {result}")
                 tool_output = {"tool": tool_name, "result": result}
                 turn["output"].append(tool_output)
