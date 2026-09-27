@@ -205,7 +205,14 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   DuckDuckGo fallback (no backend configured on device; Tavily-shape
   config still wins). Live device proof: "who are you" → "I'm Kara";
   bitcoin-price turn → web_search executed → round 2 answered $84k.
-  Commits 2e75f02/6c462df/a93039d/1d97bee; both APKs rebuilt+installed.
+  Commits 2e75f02/6c462df/a93039d/1d97bee/b0cb7b5/b7a2504; both APKs
+  rebuilt+installed. Follow-up: executed call blocks scrubbed from
+  recorded history/fold (joined-text scrub — live SSE chunks fragment
+  the block so per-entry regex never matched; proven live: history
+  clean). Live-stream echo of the call block remains by design (can't
+  unsend deltas; her activity cards already render tool runs). Daemon
+  runs as userland/bin/python3 -m agent -p 4600 (no proot); stale
+  generations killed by `-m agent` cmdline match.
 - Kara adapter BUILT in her repo (Desktop/kara, local git): EngineClient
   interface, IagentClient translator (URL-switched, both engines alive),
   config repoints to Interlux paths. Her 500 tests pass; 11 new adapter
