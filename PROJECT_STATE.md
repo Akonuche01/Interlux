@@ -216,11 +216,10 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   carries images+model, restart no-ops honestly on iagent. 91/91 her
   tests green. Both APKs rebuilt+installed. All 3 bots + brains alive.
 - Chat rendering fix 2026-09-28 (boss: call blocks leak as bubbles, no
-  thought/activity): fence-aware live send — fenced chunks (including
-  the closing fence) never stream; scrubbed whole-round text goes out
-  on round/completed and her timeline replaces rows with it. Live
-  proof: 0 leaked chunks, activity events fire, answer streams clean.
-  Unclosed-fence fallback strips danglers. (54acecd, deployed.)
+  thought/activity): fence-aware live send; scrub removes ALL blocks
+  (was first-only — multi-call rounds leaked); convergence guard runs
+  after scrub so breaker rounds stay clean. Device md5 matches repo.
+  Live multi-call proof: 0 leaks, clean rounds, completed.
 - Batch batch-2 SHIPPED (keys/models/approvals/skills/wakelock):
   providers RPC seeds blocks for every known adapter (openai/anthropic/
   inception/tokenharbor/local) with default base_urls — settings shows
