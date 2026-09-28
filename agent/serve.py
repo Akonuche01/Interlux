@@ -75,7 +75,7 @@ from .tools import EXTRA_WRITE, TOOLS, approval_label, needs_approval
 from .tools.plugins import scan_plugins
 from .tools.track import current_turn as turn_ctx
 from .tools.track import kill_turn
-from .transport import Transport, broadcast, send_to
+from .transport import Transport, broadcast, on_disconnect, send_to
 
 PLUGIN_DIR = Path(__file__).parent / "plugins"
 scan_plugins(PLUGIN_DIR, TOOLS, EXTRA_WRITE)
@@ -220,6 +220,27 @@ class ApprovalManager:
             del self.pending[fid]
         return len(doomed)
 
+    def drop_all(self) -> int:
+        """Resolve every pending approval as denied (client gone).
+
+        Deny, don't cancel: the turn then records the denial, completes,
+        and persists — so reopening the app shows what happened instead
+        of a hole where a message was.
+        """
+        n = 0
+        for fid, entry in list(self.pending.items()):
+            try:
+                fut = entry.get("future")
+                if fut is not None and not fut.done():
+                    fut.set_result(False)
+                    n += 1
+            except Exception:
+                pass
+            self.pending.pop(fid, None)
+        if n:
+            logger.info(f"dropped {n} orphaned approval(s) as denied")
+        return n
+
 
 approvals = ApprovalManager()
 
@@ -334,6 +355,26 @@ CLIENT_TOOL_TIMEOUT = 30.0
 _CLIENT_TOOL_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 # Codex wire name so Kara's existing dispatcher fires unchanged.
 CLIENT_TOOL_CALL_METHOD = "item/tool/call"
+
+
+def drop_client_waits() -> None:
+    """Disconnect hook: no orphaned wait may outlive its client.
+
+    Approvals resolve as denied so the turn completes and persists;
+    client-tool calls fail fast so the turn records the error instead
+    of hanging on an answer that can never arrive.
+    """
+    try:
+        approvals.drop_all()
+    except Exception:
+        logger.exception("drop_all approvals failed")
+    for fid, fut in list(_tool_call_pending.items()):
+        try:
+            if fut is not None and not fut.done():
+                fut.set_exception(RuntimeError("client disconnected"))
+        except Exception:
+            pass
+        _tool_call_pending.pop(fid, None)
 
 
 def _normalize_client_result(res, name: str) -> dict:
@@ -2080,6 +2121,7 @@ def main() -> int:
             started = await mcp_mod.start_all()
             if started:
                 logger.info(f"MCP tools ready: {started}")
+            on_disconnect.append(drop_client_waits)
             transport = Transport(handle_request, args.port)
             await transport.start()
         finally:
