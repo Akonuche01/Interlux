@@ -1432,7 +1432,10 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                 return await _call_client_tool(_name, kwargs)
 
             TOOLS[name] = _client_proxy
-            EXTRA_WRITE.add(name)
+            # Client tools are the client's own hands (open_url, read_page
+            # on Codex they ran client-side with no engine approval. Do
+            # NOT add to EXTRA_WRITE: gating them here stalls every turn
+            # on cards for actions the owning app already chose to offer.
             audit.append({"type": "client_tool", "action": "register",
                           "name": name})
             return {"id": request_id, "result": {
@@ -1553,7 +1556,8 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
 
         if method == "thread/unsubscribe":
             # Hygiene no-op (like Kara's): nothing server-pushed to stop.
-            return {"id": request_id, "result": True}
+            # Object, never a bare bool: her decoder throws on non-maps.
+            return {"id": request_id, "result": {}}
 
         if method == "thread/import":
             # Migration path (Kara move): bulk-load history from another
