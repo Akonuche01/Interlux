@@ -1391,6 +1391,21 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                         write_providers_file(data)
                         audit.append({"type": "provider_config",
                                       "provider": name, "deleted": True})
+                        # Never leave the default pointing at a gone block:
+                        # fall back to a keyed tokenharbor when there is
+                        # one, else clear to the built-in default.
+                        try:
+                            policy = load_policy()
+                            if policy.get("default_provider") == name:
+                                th = data.get("tokenharbor")
+                                if isinstance(th, dict) and str(
+                                        th.get("api_key", "") or ""):
+                                    policy["default_provider"] = "tokenharbor"
+                                else:
+                                    policy.pop("default_provider", None)
+                                save_policy(policy)
+                        except Exception:
+                            logger.exception("delete fallback failed")
                     return {"id": request_id, "result": {
                         "provider": name, "deleted": removed}}
                 section = data.setdefault(name, {})
