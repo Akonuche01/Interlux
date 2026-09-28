@@ -735,7 +735,7 @@ async def run_tool_loop(turn: dict, client_socket) -> None:
                 if (tool_name == "review" and isinstance(result, dict)
                         and result.get("status") == "success"):
                     await broadcast({
-                        "type": "diff/updated",
+                        "type": "turn/diff/updated",
                         "turn_id": turn.get("id"),
                         "thread_id": thread_id,
                         "repo": str(params.get("cwd", ".")),
@@ -2108,6 +2108,11 @@ async def _send_delta(delta: dict, turn_id: str = "",
     content = delta.get("content", delta.get("message", ""))
     logger.info(f"Broadcasting: type={delta.get('type')}, content={content}")
     payload = {"type": delta.get("type"), "content": content}
+    # Error frames keep their `message` key too: her adapter reads
+    # frame['message'] and falls back to a generic "turn failed" that
+    # buries the real provider error.
+    if isinstance(delta.get("message"), str) and delta["message"]:
+        payload["message"] = delta["message"]
     if turn_id:
         payload["turn_id"] = turn_id
     if thread_id:
