@@ -898,10 +898,42 @@ async def _execute_turn(
                 if not isinstance(tool_calls, list):
                     tool_calls = []
         turn["tool_calls"] = tool_calls
+        if tool_calls:
+            # Hygiene: an executed call block is machine traffic, not chat.
+            # Scrub ALL of them from the JOINED round text (agentic rounds
+            # routinely carry several calls; live chunks fragment the
+            # blocks, so per-entry regex never matches), then re-record
+            # this round's text as one clean entry. Runs BEFORE the
+            # convergence guard below so even the breaker round is clean.
+            # History, resume, and later folds stay clean. (Live deltas
+            # already streamed gated; clients render those as activity.)
+            block_re = re.compile(r'```json\s*.*?\s*```', re.DOTALL)
+            # All of them: agentic rounds routinely carry several calls and
+            # leaving every block after the first is exactly the wall of
+            # JSON bubbles in the chat.
+            stripped, n = block_re.subn("", round_text)
+            if not n:
+                # Unclosed fence (model stopped mid-block): strip from the
+                # fence to the end so a dangling opener never reaches chat.
+                stripped, n = re.subn(r'```json\s*.*$',
+                                      "", round_text, count=1, flags=re.DOTALL)
+            if n:
+                round_text = stripped.strip()
+                turn["output"] = [
+                    e for i, e in enumerate(turn["output"])
+                    if i < round_mark or not (
+                        isinstance(e, dict)
+                        and e.get("type") == "text_delta")
+                ]
+                if round_text:
+                    turn["output"].append(
+                        {"type": "text_delta", "content": round_text})
+
         # Convergence guard: a model that re-emits the identical call
         # round after round is stuck, not working. Three repeats ends
         # the turn as truncated (with a note) instead of burning quota
         # until the runaway backstop. Different calls reset the count.
+        # Runs AFTER the scrub above so the breaker round is clean too.
         if tool_calls:
             try:
                 sig = json.dumps(tool_calls, sort_keys=True)
@@ -923,31 +955,6 @@ async def _execute_turn(
                 turn["output"].append({"tool": tname,
                                        "status": "error", "message": note})
                 break
-        if tool_calls:
-            # Hygiene: an executed call block is machine traffic, not chat.
-            # Scrub it from the JOINED round text (live chunks fragment the
-            # block, so per-entry regex never matches), then re-record this
-            # round's text as one clean entry. History, resume, and later
-            # folds stay clean. (Live deltas already streamed; clients
-            # render those as activity.)
-            block_re = re.compile(r'```json\s*.*?\s*```', re.DOTALL)
-            stripped, n = block_re.subn("", round_text, count=1)
-            if not n:
-                # Unclosed fence (model stopped mid-block): strip from the
-                # fence to the end so a dangling opener never reaches chat.
-                stripped, n = re.subn(r'```json\s*.*$',
-                                      "", round_text, count=1, flags=re.DOTALL)
-            if n:
-                round_text = stripped.strip()
-                turn["output"] = [
-                    e for i, e in enumerate(turn["output"])
-                    if i < round_mark or not (
-                        isinstance(e, dict)
-                        and e.get("type") == "text_delta")
-                ]
-                if round_text:
-                    turn["output"].append(
-                        {"type": "text_delta", "content": round_text})
 
         # Fallback, round 1 only: tool call from a "run " user message.
         if rnd == 1 and not tool_calls and user_msg.strip().lower().startswith("run "):
