@@ -882,6 +882,31 @@ async def _execute_turn(
                 if not isinstance(tool_calls, list):
                     tool_calls = []
         turn["tool_calls"] = tool_calls
+        # Convergence guard: a model that re-emits the identical call
+        # round after round is stuck, not working. Three repeats ends
+        # the turn as truncated (with a note) instead of burning quota
+        # until the runaway backstop. Different calls reset the count.
+        if tool_calls:
+            try:
+                sig = json.dumps(tool_calls, sort_keys=True)
+            except Exception:
+                sig = str(tool_calls)
+            if sig == turn.get("_last_calls_sig"):
+                turn["_repeat_calls"] = int(turn.get("_repeat_calls", 1)) + 1
+            else:
+                turn["_last_calls_sig"] = sig
+                turn["_repeat_calls"] = 1
+            if int(turn.get("_repeat_calls", 1)) >= 3:
+                turn["truncated"] = True
+                turn["complete"] = True
+                note = ("stopped: the same tool call repeated "
+                        f"{turn['_repeat_calls']} rounds without progress")
+                logger.info(f"{turn['id']}: {note}")
+                first = tool_calls[0] if tool_calls else {}
+                tname = first.get("tool", "?") if isinstance(first, dict) else "?"
+                turn["output"].append({"tool": tname,
+                                       "status": "error", "message": note})
+                break
         if tool_calls:
             # Hygiene: an executed call block is machine traffic, not chat.
             # Scrub it from the JOINED round text (live chunks fragment the
