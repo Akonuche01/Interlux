@@ -20,6 +20,10 @@ _send_locks: dict[int, asyncio.Lock] = {}
 # turns complete and persist instead of hanging forever.
 on_disconnect: list[Callable[[], None]] = []
 
+# Async callbacks run when a socket connects, with the new socket.
+# Used to re-send state the fresh UI missed (open approval cards).
+on_connect: list = []
+
 
 def _lock_for(ws) -> asyncio.Lock:
     key = id(ws)
@@ -74,6 +78,13 @@ class Transport:
         _active_clients.add(websocket)
         _lock_for(websocket)
         logger.info(f"Active clients: {len(_active_clients)}")
+        for hook in list(on_connect):
+            try:
+                result = hook(websocket)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                logger.exception("connect hook failed")
         tasks: set[asyncio.Task] = set()
         try:
             async for message in websocket:

@@ -75,7 +75,7 @@ from .tools import EXTRA_WRITE, TOOLS, approval_label, needs_approval
 from .tools.plugins import scan_plugins
 from .tools.track import current_turn as turn_ctx
 from .tools.track import kill_turn
-from .transport import Transport, broadcast, on_disconnect, send_to
+from .transport import Transport, broadcast, on_connect, on_disconnect, send_to
 
 PLUGIN_DIR = Path(__file__).parent / "plugins"
 scan_plugins(PLUGIN_DIR, TOOLS, EXTRA_WRITE)
@@ -163,18 +163,21 @@ def _parse_approval_decision(decision, scope: str = "turn") -> tuple[bool, str]:
 
 class ApprovalManager:
     def __init__(self):
-        # fid -> {"future", "thread", "tool", "label"}
+        # fid -> {"future", "thread", "tool", "label", "params", "deadline"}
         self.pending: dict[str, dict] = {}
 
     def request_approval(
         self, thread_id: str, params: dict, tool: str = "", label: str = ""
     ) -> asyncio.Future:
+        self.sweep_expired()
         fid = params["id"]
         entry: dict = {
             "future": asyncio.Future(),
             "thread": thread_id,
             "tool": tool,
             "label": label,
+            "params": dict(params),
+            "deadline": time.monotonic() + APPROVAL_TTL_S,
         }
         self.pending[fid] = entry
         return entry["future"]
@@ -221,14 +224,25 @@ class ApprovalManager:
         return len(doomed)
 
     def drop_all(self) -> int:
-        """Resolve every pending approval as denied (client gone).
+        """Deny only EXPIRED approvals (client gone past TTL).
 
-        Deny, don't cancel: the turn then records the denial, completes,
-        and persists — so reopening the app shows what happened instead
-        of a hole where a message was.
+        Fresh pending approvals survive disconnects: the reconnect hook
+        re-sends them so the user can still answer. Blanket-denying here
+        is what produced phantom "denied by the client" verdicts on every
+        socket flap.
         """
+        return self.sweep_expired()
+
+    def sweep_expired(self) -> int:
+        """Resolve past-deadline approvals as denied. Returns count."""
+        now = time.monotonic()
         n = 0
         for fid, entry in list(self.pending.items()):
+            try:
+                if float(entry.get("deadline", now + 1)) > now:
+                    continue
+            except Exception:
+                pass
             try:
                 fut = entry.get("future")
                 if fut is not None and not fut.done():
@@ -238,7 +252,7 @@ class ApprovalManager:
                 pass
             self.pending.pop(fid, None)
         if n:
-            logger.info(f"dropped {n} orphaned approval(s) as denied")
+            logger.info(f"expired {n} unanswered approval(s) as denied")
         return n
 
 
@@ -302,6 +316,13 @@ ROUND_BACKSTOP = 100_000
 # watching.
 TURN_TIME_LIMIT_S = 6 * 60 * 60
 
+# How long an approval card may wait for its human. Ten minutes covers a
+# user who put the phone down mid-turn; past that the call is denied so a
+# client that will never come back cannot hold a turn (and its billing)
+# open forever. Reconnects re-send open cards (see _resend_approvals), so
+# in practice this only fires for the truly gone.
+APPROVAL_TTL_S = 10 * 60
+
 
 def _child_thread(parent: str) -> str:
     n = _sub_counters.get(parent, 0) + 1
@@ -357,12 +378,42 @@ _CLIENT_TOOL_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 CLIENT_TOOL_CALL_METHOD = "item/tool/call"
 
 
+async def _resend_approvals(ws) -> None:
+    """Reconnect hook: re-send every still-open approval card.
+
+    A socket flap mid-turn used to orphan the card — the turn kept
+    waiting, the fresh UI never heard about it, and the disconnect hook
+    eventually denied it behind the user's back. Re-sending on connect
+    closes that hole: the card reappears, answerable, on the live UI.
+    """
+    try:
+        expired = approvals.sweep_expired()
+        if expired:
+            logger.info(f"swept {expired} expired on reconnect")
+    except Exception:
+        logger.exception("reconnect sweep failed")
+    for fid, entry in list(approvals.pending.items()):
+        try:
+            params = entry.get("params") or {}
+            if not params:
+                continue
+            await send_to(ws, {
+                "type": "approval_request",
+                "id": fid,
+                "params": dict(params),
+            })
+            logger.info(f"re-sent approval {fid} to reconnected client")
+        except Exception:
+            logger.exception(f"resend of {fid} failed")
+
+
 def drop_client_waits() -> None:
     """Disconnect hook: no orphaned wait may outlive its client.
 
-    Approvals resolve as denied so the turn completes and persists;
-    client-tool calls fail fast so the turn records the error instead
-    of hanging on an answer that can never arrive.
+    Approvals past their TTL are denied; fresh ones stay open for the
+    reconnect resend below. Client-tool calls fail fast so the turn
+    records the error instead of hanging on an answer that can never
+    arrive.
     """
     try:
         approvals.drop_all()
@@ -2252,6 +2303,7 @@ def main() -> int:
             if started:
                 logger.info(f"MCP tools ready: {started}")
             on_disconnect.append(drop_client_waits)
+            on_connect.append(_resend_approvals)
             transport = Transport(handle_request, args.port)
             await transport.start()
         finally:
