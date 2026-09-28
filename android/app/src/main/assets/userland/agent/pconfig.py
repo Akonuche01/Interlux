@@ -17,6 +17,7 @@ import urllib.request
 from pathlib import Path
 
 from .providers import PROVIDERS, BaseProvider
+from .providers.openai import OpenAIProvider
 
 logger = logging.getLogger("pconfig")
 
@@ -175,36 +176,46 @@ def _fetch_model_ids(base_url: str, api_key: str,
 async def list_models(name: str) -> dict:
     """Models for a provider: config override > live /models > curated.
 
-    Never includes secrets. Raises ValueError for unknown providers.
+    Never includes secrets. A file-configured custom block (e.g. a new
+    OpenAI-compatible gateway) lists like a known one; truly unknown
+    names still raise ValueError.
     """
-    if name not in PROVIDERS:
-        raise ValueError(f"unknown provider: {name}")
     section = config_section(name)
+    if name not in PROVIDERS and not section:
+        raise ValueError(f"unknown provider: {name}")
     override = section.get("models")
     if isinstance(override, list) and override:
         ids = [str(m) for m in override if str(m).strip()]
         if ids:
             return {"provider": name, "default": ids[0],
                     "models": [{"id": m, "source": "config"} for m in ids]}
-    if name in LIVE_MODELS_OK:
-        base = str(section.get("base_url", "") or DEFAULT_BASES.get(name, ""))
-        key = str(section.get("api_key", "") or "")
-        if base and key:
-            ids = await asyncio.to_thread(_fetch_model_ids, base, key)
-            if ids:
-                return {"provider": name, "default": ids[0],
-                        "models": [{"id": m, "source": "live"} for m in ids]}
+    base = str(section.get("base_url", "") or DEFAULT_BASES.get(name, ""))
+    key = str(section.get("api_key", "") or "")
+    if base and key and (name in LIVE_MODELS_OK or name not in PROVIDERS):
+        ids = await asyncio.to_thread(_fetch_model_ids, base, key)
+        if ids:
+            return {"provider": name, "default": ids[0],
+                    "models": [{"id": m, "source": "live"} for m in ids]}
     curated = list(CURATED_MODELS.get(name, []))
     return {"provider": name, "default": (curated[0] if curated else ""),
             "models": [{"id": m, "source": "curated"} for m in curated]}
 
 
 def load_provider(name: str, config: dict) -> BaseProvider | None:
-    if name not in PROVIDERS:
-        return None
     if not isinstance(config, dict):
         config = {}
-    return PROVIDERS[name](
-        config.get("api_key", ""),
-        config.get("base_url"),
-    )
+    if name in PROVIDERS:
+        return PROVIDERS[name](
+            config.get("api_key", ""),
+            config.get("base_url"),
+        )
+    # Codex parity: a custom block with its own base_url is an
+    # OpenAI-compatible endpoint (vyceai, corporate gateways, ollama
+    # remotes). Refusing unknown names is what made every new provider
+    # undeletable-by-design: listed but never servable.
+    if isinstance(config.get("base_url"), str) and config["base_url"].strip():
+        return OpenAIProvider(
+            config.get("api_key", ""),
+            config.get("base_url"),
+        )
+    return None

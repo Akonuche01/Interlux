@@ -159,7 +159,11 @@ object Userland {
     //     replacement. It queues the message, which the running turn picks up at
     //     its next round boundary, and replies immediately -- that reply was
     //     what kept the client's send button disabled for the whole turn.
-    private const val VERSION = "full-tools-46"
+    // v47 (rendering + parity): mirrors re-synced with scrub-all,
+    // fence-gated live send, convergence-after-scrub, disconnect hook,
+    // immediate turn reply, materialized resume, client-tool approval
+    // bypass, seeded provider blocks, skills preamble, approval_mode.
+    private const val VERSION = "full-tools-47"
     private const val ASSET_DIR = "userland"
     private const val DIR_NAME = "userland"
 

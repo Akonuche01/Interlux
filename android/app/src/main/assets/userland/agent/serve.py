@@ -75,7 +75,7 @@ from .tools import EXTRA_WRITE, TOOLS, approval_label, needs_approval
 from .tools.plugins import scan_plugins
 from .tools.track import current_turn as turn_ctx
 from .tools.track import kill_turn
-from .transport import Transport, broadcast, send_to
+from .transport import Transport, broadcast, on_disconnect, send_to
 
 PLUGIN_DIR = Path(__file__).parent / "plugins"
 scan_plugins(PLUGIN_DIR, TOOLS, EXTRA_WRITE)
@@ -220,6 +220,27 @@ class ApprovalManager:
             del self.pending[fid]
         return len(doomed)
 
+    def drop_all(self) -> int:
+        """Resolve every pending approval as denied (client gone).
+
+        Deny, don't cancel: the turn then records the denial, completes,
+        and persists — so reopening the app shows what happened instead
+        of a hole where a message was.
+        """
+        n = 0
+        for fid, entry in list(self.pending.items()):
+            try:
+                fut = entry.get("future")
+                if fut is not None and not fut.done():
+                    fut.set_result(False)
+                    n += 1
+            except Exception:
+                pass
+            self.pending.pop(fid, None)
+        if n:
+            logger.info(f"dropped {n} orphaned approval(s) as denied")
+        return n
+
 
 approvals = ApprovalManager()
 
@@ -334,6 +355,26 @@ CLIENT_TOOL_TIMEOUT = 30.0
 _CLIENT_TOOL_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 # Codex wire name so Kara's existing dispatcher fires unchanged.
 CLIENT_TOOL_CALL_METHOD = "item/tool/call"
+
+
+def drop_client_waits() -> None:
+    """Disconnect hook: no orphaned wait may outlive its client.
+
+    Approvals resolve as denied so the turn completes and persists;
+    client-tool calls fail fast so the turn records the error instead
+    of hanging on an answer that can never arrive.
+    """
+    try:
+        approvals.drop_all()
+    except Exception:
+        logger.exception("drop_all approvals failed")
+    for fid, fut in list(_tool_call_pending.items()):
+        try:
+            if fut is not None and not fut.done():
+                fut.set_exception(RuntimeError("client disconnected"))
+        except Exception:
+            pass
+        _tool_call_pending.pop(fid, None)
 
 
 def _normalize_client_result(res, name: str) -> dict:
@@ -694,7 +735,7 @@ async def run_tool_loop(turn: dict, client_socket) -> None:
                 if (tool_name == "review" and isinstance(result, dict)
                         and result.get("status") == "success"):
                     await broadcast({
-                        "type": "diff/updated",
+                        "type": "turn/diff/updated",
                         "turn_id": turn.get("id"),
                         "thread_id": thread_id,
                         "repo": str(params.get("cwd", ".")),
@@ -774,6 +815,8 @@ async def _execute_turn(
                                           extra_system)
         has_error = False
         round_text_parts: list[str] = []
+        # Shadow buffer for fence tracking (live-send gating above).
+        fence_buf = ""
         # Output index where this round's deltas start (used to re-record
         # cleaned text after tool-call scrubbing below).
         round_mark = len(turn["output"])
@@ -791,7 +834,21 @@ async def _execute_turn(
                 continue
             turn["output"].append(delta)
             if delta.get("type") == "text_delta":
-                round_text_parts.append(delta.get("content", ""))
+                chunk = delta.get("content", "")
+                round_text_parts.append(chunk)
+                # Fence-aware live send: the model wraps tool calls in
+                # ```json fences that fragment across chunks. Anything
+                # streamed inside (or as part of) a fence renders as raw
+                # call syntax in the chat -- the wall of JSON bubbles. Hold
+                # fenced chunks back, including the chunk that closes the
+                # fence; the scrubbed whole-round text goes out on
+                # round/completed and the client replaces these rows with
+                # it. Pre-fence narration still streams live.
+                if isinstance(chunk, str):
+                    odd_before = fence_buf.count("```") % 2 == 1
+                    fence_buf += chunk
+                    if odd_before or "```" in chunk:
+                        continue
             if delta.get("type") == "error":
                 has_error = True
             await _send_delta(delta, turn.get("id", ""), thread_id,
@@ -843,13 +900,23 @@ async def _execute_turn(
         turn["tool_calls"] = tool_calls
         if tool_calls:
             # Hygiene: an executed call block is machine traffic, not chat.
-            # Scrub it from the JOINED round text (live chunks fragment the
-            # block, so per-entry regex never matches), then re-record this
-            # round's text as one clean entry. History, resume, and later
-            # folds stay clean. (Live deltas already streamed; clients
-            # render those as activity.)
+            # Scrub ALL of them from the JOINED round text (agentic rounds
+            # routinely carry several calls; live chunks fragment the
+            # blocks, so per-entry regex never matches), then re-record
+            # this round's text as one clean entry. Runs BEFORE the
+            # convergence guard below so even the breaker round is clean.
+            # History, resume, and later folds stay clean. (Live deltas
+            # already streamed gated; clients render those as activity.)
             block_re = re.compile(r'```json\s*.*?\s*```', re.DOTALL)
-            stripped, n = block_re.subn("", round_text, count=1)
+            # All of them: agentic rounds routinely carry several calls and
+            # leaving every block after the first is exactly the wall of
+            # JSON bubbles in the chat.
+            stripped, n = block_re.subn("", round_text)
+            if not n:
+                # Unclosed fence (model stopped mid-block): strip from the
+                # fence to the end so a dangling opener never reaches chat.
+                stripped, n = re.subn(r'```json\s*.*$',
+                                      "", round_text, count=1, flags=re.DOTALL)
             if n:
                 round_text = stripped.strip()
                 turn["output"] = [
@@ -861,6 +928,33 @@ async def _execute_turn(
                 if round_text:
                     turn["output"].append(
                         {"type": "text_delta", "content": round_text})
+
+        # Convergence guard: a model that re-emits the identical call
+        # round after round is stuck, not working. Three repeats ends
+        # the turn as truncated (with a note) instead of burning quota
+        # until the runaway backstop. Different calls reset the count.
+        # Runs AFTER the scrub above so the breaker round is clean too.
+        if tool_calls:
+            try:
+                sig = json.dumps(tool_calls, sort_keys=True)
+            except Exception:
+                sig = str(tool_calls)
+            if sig == turn.get("_last_calls_sig"):
+                turn["_repeat_calls"] = int(turn.get("_repeat_calls", 1)) + 1
+            else:
+                turn["_last_calls_sig"] = sig
+                turn["_repeat_calls"] = 1
+            if int(turn.get("_repeat_calls", 1)) >= 3:
+                turn["truncated"] = True
+                turn["complete"] = True
+                note = ("stopped: the same tool call repeated "
+                        f"{turn['_repeat_calls']} rounds without progress")
+                logger.info(f"{turn['id']}: {note}")
+                first = tool_calls[0] if tool_calls else {}
+                tname = first.get("tool", "?") if isinstance(first, dict) else "?"
+                turn["output"].append({"tool": tname,
+                                       "status": "error", "message": note})
+                break
 
         # Fallback, round 1 only: tool call from a "run " user message.
         if rnd == 1 and not tool_calls and user_msg.strip().lower().startswith("run "):
@@ -1044,10 +1138,37 @@ async def handle_turn(payload: dict, client_socket) -> dict:
         # Epic D: skill catalog (+ requested bodies) ride as system messages
         # inside build_messages, rebuilt every Epic J round. The agency
         # prompt (tools + calling convention) rides in front of them.
-        return await _execute_turn(
+        task = asyncio.create_task(_run_turn(
             payload, params, user_msg, provider, model,
             thread_id, turn, client_socket, state,
             agency_messages() + skill_messages(params.get("skills")),
+            token, sandbox_token,
+        ))
+        RUNNING[turn["id"]] = task
+        # Codex parity: the reply only opens the turn. Everything else —
+        # deltas, tool runs, completion — arrives as broadcasts. Awaiting
+        # the whole loop here left send futures pending for hours and made
+        # every reconnect look like a failed send.
+        return {
+            "id": payload.get("id"),
+            "result": {"turn_id": turn["id"], "started": True},
+        }
+    except Exception:
+        RUNNING.pop(turn["id"], None)
+        sandbox_ctx.reset(sandbox_token)
+        turn_ctx.reset(token)
+        raise
+
+
+async def _run_turn(payload: dict, params: dict, user_msg: str,
+                    provider, model: str, thread_id: str, turn: dict,
+                    client_socket, state: dict, extra_system: list,
+                    token, sandbox_token) -> None:
+    """Background half of handle_turn: run the loop, persist, broadcast."""
+    try:
+        await _execute_turn(
+            payload, params, user_msg, provider, model,
+            thread_id, turn, client_socket, state, extra_system,
         )
     except asyncio.CancelledError:
         kill_turn(turn["id"])
@@ -1060,14 +1181,24 @@ async def handle_turn(payload: dict, client_socket) -> dict:
         await broadcast({"type": "cancelled", "turn_id": turn["id"]})
         await broadcast({"type": "turn/completed", "turn_id": turn["id"],
                          "thread_id": thread_id, "cancelled": True})
-        return {
-            "id": payload.get("id"),
-            "result": {"turn_id": turn["id"], "cancelled": True},
-        }
+    except Exception as e:
+        logger.exception(f"turn {turn['id']} crashed")
+        await broadcast({"type": "error", "turn_id": turn["id"],
+                         "thread_id": thread_id,
+                         "message": str(e)[:1000]})
+        await broadcast({"type": "turn/completed", "turn_id": turn["id"],
+                         "thread_id": thread_id,
+                         "error": str(e)[:500]})
     finally:
         RUNNING.pop(turn["id"], None)
-        sandbox_ctx.reset(sandbox_token)
-        turn_ctx.reset(token)
+        try:
+            sandbox_ctx.reset(sandbox_token)
+        except Exception:
+            pass
+        try:
+            turn_ctx.reset(token)
+        except Exception:
+            pass
 
 
 async def handle_request(payload: dict, client_socket) -> dict | None:
@@ -1087,6 +1218,19 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                         RuntimeError(str(payload["error"])[:500]))
                 else:
                     fut.set_result(payload.get("result"))
+                return None
+            # Kara move: her app answers approval cards with a method-less
+            # frame (Codex wire shape) carrying the fid as id. Route those
+            # to the approval table instead of dropping them — a dropped
+            # answer stalls the turn forever with no error surfaced, which
+            # reads as "answers halfway then nothing lands".
+            fid = payload.get("id")
+            if isinstance(fid, str) and fid in approvals.pending:
+                if "error" in payload:
+                    approvals.approve(fid, "decline")
+                else:
+                    approvals.approve(fid, payload.get("result"))
+                logger.info(f"approval answered method-less: {fid}")
             return None
 
         if method == "capabilities":
@@ -1247,6 +1391,21 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                         write_providers_file(data)
                         audit.append({"type": "provider_config",
                                       "provider": name, "deleted": True})
+                        # Never leave the default pointing at a gone block:
+                        # fall back to a keyed tokenharbor when there is
+                        # one, else clear to the built-in default.
+                        try:
+                            policy = load_policy()
+                            if policy.get("default_provider") == name:
+                                th = data.get("tokenharbor")
+                                if isinstance(th, dict) and str(
+                                        th.get("api_key", "") or ""):
+                                    policy["default_provider"] = "tokenharbor"
+                                else:
+                                    policy.pop("default_provider", None)
+                                save_policy(policy)
+                        except Exception:
+                            logger.exception("delete fallback failed")
                     return {"id": request_id, "result": {
                         "provider": name, "deleted": removed}}
                 section = data.setdefault(name, {})
@@ -1378,7 +1537,10 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                 return await _call_client_tool(_name, kwargs)
 
             TOOLS[name] = _client_proxy
-            EXTRA_WRITE.add(name)
+            # Client tools are the client's own hands (open_url, read_page
+            # on Codex they ran client-side with no engine approval. Do
+            # NOT add to EXTRA_WRITE: gating them here stalls every turn
+            # on cards for actions the owning app already chose to offer.
             audit.append({"type": "client_tool", "action": "register",
                           "name": name})
             return {"id": request_id, "result": {
@@ -1499,7 +1661,8 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
 
         if method == "thread/unsubscribe":
             # Hygiene no-op (like Kara's): nothing server-pushed to stop.
-            return {"id": request_id, "result": True}
+            # Object, never a bare bool: her decoder throws on non-maps.
+            return {"id": request_id, "result": {}}
 
         if method == "thread/import":
             # Migration path (Kara move): bulk-load history from another
@@ -1574,6 +1737,16 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                     "error": {"code": -32602, "message": "thread_id required"},
                 }
             state, source = materialize_state(tid)
+            # Codex parity: opening a thread materializes it. A persisted
+            # (even empty) thread means resume/read/open work uniformly,
+            # and a resumed id is never silently "new" again later.
+            # steer/fork/compact call materialize_state directly, so their
+            # unknown-thread errors are unaffected.
+            if source == "new":
+                try:
+                    save_state(state)
+                except Exception:
+                    logger.exception("failed to persist new thread")
             # Kara move: thread/start carries developerInstructions (persona)
             # and the adapter forwards them here; persist so every later
             # turn (and resume/fork) injects them as system messages.
@@ -2040,6 +2213,11 @@ async def _send_delta(delta: dict, turn_id: str = "",
     content = delta.get("content", delta.get("message", ""))
     logger.info(f"Broadcasting: type={delta.get('type')}, content={content}")
     payload = {"type": delta.get("type"), "content": content}
+    # Error frames keep their `message` key too: her adapter reads
+    # frame['message'] and falls back to a generic "turn failed" that
+    # buries the real provider error.
+    if isinstance(delta.get("message"), str) and delta["message"]:
+        payload["message"] = delta["message"]
     if turn_id:
         payload["turn_id"] = turn_id
     if thread_id:
@@ -2067,6 +2245,7 @@ def main() -> int:
             started = await mcp_mod.start_all()
             if started:
                 logger.info(f"MCP tools ready: {started}")
+            on_disconnect.append(drop_client_waits)
             transport = Transport(handle_request, args.port)
             await transport.start()
         finally:
