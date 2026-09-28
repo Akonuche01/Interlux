@@ -1085,10 +1085,37 @@ async def handle_turn(payload: dict, client_socket) -> dict:
         # Epic D: skill catalog (+ requested bodies) ride as system messages
         # inside build_messages, rebuilt every Epic J round. The agency
         # prompt (tools + calling convention) rides in front of them.
-        return await _execute_turn(
+        task = asyncio.create_task(_run_turn(
             payload, params, user_msg, provider, model,
             thread_id, turn, client_socket, state,
             agency_messages() + skill_messages(params.get("skills")),
+            token, sandbox_token,
+        ))
+        RUNNING[turn["id"]] = task
+        # Codex parity: the reply only opens the turn. Everything else —
+        # deltas, tool runs, completion — arrives as broadcasts. Awaiting
+        # the whole loop here left send futures pending for hours and made
+        # every reconnect look like a failed send.
+        return {
+            "id": payload.get("id"),
+            "result": {"turn_id": turn["id"], "started": True},
+        }
+    except Exception:
+        RUNNING.pop(turn["id"], None)
+        sandbox_ctx.reset(sandbox_token)
+        turn_ctx.reset(token)
+        raise
+
+
+async def _run_turn(payload: dict, params: dict, user_msg: str,
+                    provider, model: str, thread_id: str, turn: dict,
+                    client_socket, state: dict, extra_system: list,
+                    token, sandbox_token) -> None:
+    """Background half of handle_turn: run the loop, persist, broadcast."""
+    try:
+        await _execute_turn(
+            payload, params, user_msg, provider, model,
+            thread_id, turn, client_socket, state, extra_system,
         )
     except asyncio.CancelledError:
         kill_turn(turn["id"])
@@ -1101,14 +1128,24 @@ async def handle_turn(payload: dict, client_socket) -> dict:
         await broadcast({"type": "cancelled", "turn_id": turn["id"]})
         await broadcast({"type": "turn/completed", "turn_id": turn["id"],
                          "thread_id": thread_id, "cancelled": True})
-        return {
-            "id": payload.get("id"),
-            "result": {"turn_id": turn["id"], "cancelled": True},
-        }
+    except Exception as e:
+        logger.exception(f"turn {turn['id']} crashed")
+        await broadcast({"type": "error", "turn_id": turn["id"],
+                         "thread_id": thread_id,
+                         "message": str(e)[:1000]})
+        await broadcast({"type": "turn/completed", "turn_id": turn["id"],
+                         "thread_id": thread_id,
+                         "error": str(e)[:500]})
     finally:
         RUNNING.pop(turn["id"], None)
-        sandbox_ctx.reset(sandbox_token)
-        turn_ctx.reset(token)
+        try:
+            sandbox_ctx.reset(sandbox_token)
+        except Exception:
+            pass
+        try:
+            turn_ctx.reset(token)
+        except Exception:
+            pass
 
 
 async def handle_request(payload: dict, client_socket) -> dict | None:
