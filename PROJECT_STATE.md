@@ -200,6 +200,11 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   turns burn quota + hit 429s, use sparingly. Sessions tarball BLOCKED
   (model refusal + 429) — pinned chat file confirmed present in
   ~/.codex/sessions; needs user-run tar in Termux or later retry.
+- Sessions MIGRATED 2026-09-28 (user ran the tar in Termux):
+  kene-sessions.tar.gz (3.5MB, 81 rollouts incl. archived) pulled,
+  79/79 imported via thread/import with original UUIDs preserved —
+  pinned chat (01a0c661, 425 turns) readable, drawer lists UUID
+  threads, pin resolves. Skipped: 0, empty: 0.
 - Batch batch-2 SHIPPED (keys/models/approvals/skills/wakelock):
   providers RPC seeds blocks for every known adapter (openai/anthropic/
   inception/tokenharbor/local) with default base_urls — settings shows
