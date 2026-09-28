@@ -189,17 +189,17 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   history (fail/overwrite/append) from e.g. codex thread/read output;
   imported history reaches providers like native history. Device proof
   5/5 E2E.
-- Bot migration IN PROGRESS (boss: move ALL bots to our engine; third
-  bot = degen trader). Supervision FIXED and device-PROVEN: BotSupervisor
-  reads the legacy agent-level bots.autostart, sets guest PATH, skips
-  unstaged runners, logs every step; cold boot spawned forexmind (brain
-  `python3 fxmain.py` up) + marketmind, pid files + proot trees verified,
-  watchdog tick idempotent. forexmind fully migrated. marketmind BLOCKED
-  on analytics/patterns.py (still missing — needs Termux export). degen
-  trader SOURCES MISSING (only in Termux ~/projects, unreadable from our
-  uid — needs Termux export to /sdcard). Nothing running anywhere right
-  now except our forexmind (+marketmind crash-looping till patterns.py
-  lands). User must confirm Termux:Boot won't revive originals.
+- Bot migration COMPLETE 2026-09-28 (via live Codex in Termux :4500):
+  all 3 bots supervised and alive — forexmind (fxmain brain), marketmind
+  (HEALED: full analytics synced from /sdcard export incl. patterns.py +
+  catchup.py; Telegram live, study loop running), degentrader (sources
+  pulled from /sdcard export, staged, heartbeat + discovery cycling).
+  Approval fix (784eb0c) device-proven: method-less answers resolve
+  (4× ask→accept→exec→complete), approval_mode=never restored. Termux
+  reached through resident Codex (adb shell denied as expected); codex
+  turns burn quota + hit 429s, use sparingly. Sessions tarball BLOCKED
+  (model refusal + 429) — pinned chat file confirmed present in
+  ~/.codex/sessions; needs user-run tar in Termux or later retry.
 - Batch batch-2 SHIPPED (keys/models/approvals/skills/wakelock):
   providers RPC seeds blocks for every known adapter (openai/anthropic/
   inception/tokenharbor/local) with default base_urls — settings shows
