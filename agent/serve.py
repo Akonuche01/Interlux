@@ -1632,6 +1632,16 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                     "error": {"code": -32602, "message": "thread_id required"},
                 }
             state, source = materialize_state(tid)
+            # Codex parity: opening a thread materializes it. A persisted
+            # (even empty) thread means resume/read/open work uniformly,
+            # and a resumed id is never silently "new" again later.
+            # steer/fork/compact call materialize_state directly, so their
+            # unknown-thread errors are unaffected.
+            if source == "new":
+                try:
+                    save_state(state)
+                except Exception:
+                    logger.exception("failed to persist new thread")
             # Kara move: thread/start carries developerInstructions (persona)
             # and the adapter forwards them here; persist so every later
             # turn (and resume/fork) injects them as system messages.
