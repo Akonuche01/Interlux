@@ -224,6 +224,12 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   end-to-end with safe default fallback (typo key deleted live).
   Vyceai roster failure = bad saved key (endpoint verified 401 without
   key); user re-enters key to finish the switch.
+- Phantom-deny fix 2026-09-28 (boss: shell denied before the card is
+  seen): approvals survive disconnects (no more auto-deny on flap),
+  reconnect re-sends open cards, 10-min TTL bounds the truly gone.
+  Live proof across 3 sockets: asked, flapped, re-sent, late accept
+  executed, turn completed. Policy default now atria (switch went
+  through).
 - Provider parity 2026-09-28 (boss: no hardcoded provider names):
   model/list passes file-configured custom providers through (was a
   hard unknown-provider refusal in the handler); delete fallback picks
