@@ -205,8 +205,7 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   79/79 imported via thread/import with original UUIDs preserved —
   pinned chat (01a0c661, 425 turns) readable, drawer lists UUID
   threads, pin resolves. Skipped: 0, empty: 0.
-- Environment-parity batch 2026-09-28 (boss: rebuild Codex qualities
-  in the daemon instead of bending Kara): disconnect hook denies
+- Environment-parity batch 2026-09-28 (boss: rebuild Codex qualities  in the daemon instead of bending Kara): disconnect hook denies
   orphaned approvals + fails client-tool waits (turns complete and
   persist instead of hanging); turn/start replies in ~0.03s, execution
   in background task; unsubscribe returns {}; client tools bypass
@@ -216,6 +215,12 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   adapter forwards provider/mode/skills/sandbox_root/api/stream, steer
   carries images+model, restart no-ops honestly on iagent. 91/91 her
   tests green. Both APKs rebuilt+installed. All 3 bots + brains alive.
+- Chat rendering fix 2026-09-28 (boss: call blocks leak as bubbles, no
+  thought/activity): fence-aware live send — fenced chunks (including
+  the closing fence) never stream; scrubbed whole-round text goes out
+  on round/completed and her timeline replaces rows with it. Live
+  proof: 0 leaked chunks, activity events fire, answer streams clean.
+  Unclosed-fence fallback strips danglers. (54acecd, deployed.)
 - Batch batch-2 SHIPPED (keys/models/approvals/skills/wakelock):
   providers RPC seeds blocks for every known adapter (openai/anthropic/
   inception/tokenharbor/local) with default base_urls — settings shows
