@@ -3,7 +3,7 @@
 import logging
 from typing import AsyncIterator
 
-from .base import BaseProvider
+from .base import BaseProvider, BROWSER_UA
 from .media import flatten_messages, openai_blocks
 from .responses import ResponsesUnsupported, post_responses
 from .streaming import openai_chunks, openai_usage, post_sse
@@ -26,6 +26,7 @@ class OpenAIProvider(BaseProvider):
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
+            "User-Agent": BROWSER_UA,
         }
         # The WHOLE conversation, not just the last message. Reading
         # `messages[-1]` here discarded the history `build_messages` assembled,

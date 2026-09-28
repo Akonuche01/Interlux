@@ -17,6 +17,7 @@ import urllib.request
 from pathlib import Path
 
 from .providers import PROVIDERS, BaseProvider
+from .providers.base import BROWSER_UA
 from .providers.openai import OpenAIProvider
 
 logger = logging.getLogger("pconfig")
@@ -154,23 +155,35 @@ def write_providers_file(data: dict) -> Path:
 
 
 def _fetch_model_ids(base_url: str, api_key: str,
-                     timeout: int = 15) -> list[str] | None:
-    """Blocking GET {base}/models (runs in an executor). None when unusable."""
+                     timeout: int = 15) -> tuple[list[str] | None, str | None]:
+    """Blocking GET {base}/models (runs in an executor).
+
+    Returns (ids, error): ids None when unusable, with a short reason
+    (HTTP status or transport failure) instead of silence — callers
+    surface it so "empty catalogue" and "could not ask" stay distinct.
+    """
     req = urllib.request.Request(
         base_url.rstrip("/") + "/models",
-        headers={"Authorization": f"Bearer {api_key}"},
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "User-Agent": BROWSER_UA,
+        },
         method="GET",
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             data = json.loads(r.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as e:
+        return None, f"HTTP {e.code}"
     except (urllib.error.URLError, OSError, ValueError, TimeoutError) as e:
         logger.info(f"live model discovery failed: {e}")
-        return None
+        return None, "unreachable"
     items = data.get("data", []) if isinstance(data, dict) else []
     ids = sorted({str(x.get("id")) for x in items
                   if isinstance(x, dict) and x.get("id")})
-    return ids or None
+    if not ids:
+        return None, "empty catalogue"
+    return ids, None
 
 
 async def list_models(name: str) -> dict:
@@ -191,14 +204,19 @@ async def list_models(name: str) -> dict:
                     "models": [{"id": m, "source": "config"} for m in ids]}
     base = str(section.get("base_url", "") or DEFAULT_BASES.get(name, ""))
     key = str(section.get("api_key", "") or "")
+    discovery: dict = {"attempted": False, "error": None}
     if base and key and (name in LIVE_MODELS_OK or name not in PROVIDERS):
-        ids = await asyncio.to_thread(_fetch_model_ids, base, key)
+        discovery["attempted"] = True
+        ids, err = await asyncio.to_thread(_fetch_model_ids, base, key)
         if ids:
             return {"provider": name, "default": ids[0],
-                    "models": [{"id": m, "source": "live"} for m in ids]}
+                    "models": [{"id": m, "source": "live"} for m in ids],
+                    "discovery": discovery}
+        discovery["error"] = err or "unknown"
     curated = list(CURATED_MODELS.get(name, []))
     return {"provider": name, "default": (curated[0] if curated else ""),
-            "models": [{"id": m, "source": "curated"} for m in curated]}
+            "models": [{"id": m, "source": "curated"} for m in curated],
+            "discovery": discovery}
 
 
 def load_provider(name: str, config: dict) -> BaseProvider | None:

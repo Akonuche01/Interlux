@@ -12,6 +12,8 @@ import time
 import urllib.request
 from pathlib import Path
 
+from ..providers.base import BROWSER_UA
+
 INTERLUX_HOME = "/data/user/0/com.keneristudios.interlux/files/userland/home"
 
 
@@ -61,6 +63,7 @@ async def image_generate(
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
+        "User-Agent": BROWSER_UA,
     }
     payload = {
         "model": model,

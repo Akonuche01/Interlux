@@ -6,7 +6,7 @@ import urllib.request
 import ssl
 from typing import AsyncIterator
 
-from .base import BaseProvider
+from .base import BaseProvider, BROWSER_UA
 from .media import flatten_messages, openai_blocks
 
 logger = logging.getLogger("providers.inception")
@@ -26,6 +26,7 @@ class InceptionProvider(BaseProvider):
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
+            "User-Agent": BROWSER_UA,
         }
         # The whole conversation, not just the last message -- see the note in
         # openai.py. Reading `messages[-1]` discarded the thread's history.

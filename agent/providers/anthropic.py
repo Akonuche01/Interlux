@@ -3,7 +3,7 @@
 import logging
 from typing import AsyncIterator
 
-from .base import BaseProvider
+from .base import BaseProvider, BROWSER_UA
 from .media import anthropic_blocks, flatten_messages
 from .streaming import anthropic_chunks, anthropic_usage, post_sse
 
@@ -27,6 +27,7 @@ class AnthropicProvider(BaseProvider):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
             "anthropic-version": "2023-06-01",
+            "User-Agent": BROWSER_UA,
         }
         # The whole conversation, not just the last message -- see the note in
         # openai.py. Reading `messages[-1]` discarded the thread's history.
