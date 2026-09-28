@@ -215,6 +215,15 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   adapter forwards provider/mode/skills/sandbox_root/api/stream, steer
   carries images+model, restart no-ops honestly on iagent. 91/91 her
   tests green. Both APKs rebuilt+installed. All 3 bots + brains alive.
+- Wipe-cycle fix 2026-09-28 (boss: chats keep wiping): userland
+  re-extracts on restart were restoring a STALE APK-bundled agent/ over
+  live fixes. Mirrors re-synced (39 files), VERSION bumped 46->47, both
+  APKs rebuilt+installed — re-extracts now plant current code. Adapter
+  hardens bool RPC results (the 5× unsubscribe crash). Custom
+  OpenAI-compatible providers supported (vyceai shape); delete works
+  end-to-end with safe default fallback (typo key deleted live).
+  Vyceai roster failure = bad saved key (endpoint verified 401 without
+  key); user re-enters key to finish the switch.
 - Chat rendering fix 2026-09-28 (boss: call blocks leak as bubbles, no
   thought/activity): fence-aware live send; scrub removes ALL blocks
   (was first-only — multi-call rounds leaked); convergence guard runs
