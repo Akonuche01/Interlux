@@ -24,6 +24,17 @@ def openai_chunks(obj: dict) -> list[str]:
     return out
 
 
+def openai_reasoning(obj: dict) -> list[str]:
+    """DeepSeek-style reasoning_content carried beside content."""
+    out = []
+    for choice in obj.get("choices", []) or []:
+        delta = choice.get("delta", {}) or {}
+        text = delta.get("reasoning_content")
+        if isinstance(text, str) and text:
+            out.append(text)
+    return out
+
+
 def _num(value) -> int:
     try:
         return int(value or 0)
@@ -103,6 +114,17 @@ def anthropic_chunks(obj: dict) -> list[str]:
     return []
 
 
+def anthropic_reasoning(obj: dict) -> list[str]:
+    """Claude thinking blocks (only sent when thinking was requested)."""
+    if obj.get("type") == "content_block_delta":
+        delta = obj.get("delta", {}) or {}
+        if delta.get("type") == "thinking_delta":
+            text = delta.get("thinking")
+            if isinstance(text, str) and text:
+                return [text]
+    return []
+
+
 def _fallback_body(body: str) -> dict:
     try:
         data = json.loads(body)
@@ -138,11 +160,14 @@ async def post_sse(
     chunks_from: Callable[[dict], list[str]],
     timeout: int = 120,
     usage_from: Callable[[dict], dict | None] | None = None,
+    reasoning_from: Callable[[dict], list[str]] | None = None,
 ) -> AsyncIterator[dict]:
     """Yield text_delta dicts as SSE chunks arrive, then stop (caller sends complete).
 
     usage_from maps a parsed SSE object (or full body) to a usage fragment;
     fragments merge into one running total emitted as {"type": "usage"}.
+    reasoning_from maps an object to thinking fragments, emitted as
+    {"type": "reasoning_delta"} — kept out of the answer stream.
     """
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
@@ -186,6 +211,11 @@ async def post_sse(
                     for chunk in chunks_from(obj):
                         got_chunk = True
                         loop.call_soon_threadsafe(queue.put_nowait, chunk)
+                    if reasoning_from is not None:
+                        for r in reasoning_from(obj):
+                            loop.call_soon_threadsafe(
+                                queue.put_nowait,
+                                {"type": "reasoning_delta", "content": r})
             if not got_chunk:
                 raw = "".join(raw_parts)
                 fallback = _fallback_content(raw)

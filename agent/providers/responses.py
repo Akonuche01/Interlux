@@ -42,6 +42,13 @@ def _chunks_from(obj: dict) -> list[str]:
     return []
 
 
+def _reasoning_from(obj: dict) -> list[str]:
+    if obj.get("type") == "response.reasoning_summary_text.delta":
+        delta = obj.get("delta", "")
+        return [delta] if isinstance(delta, str) and delta else []
+    return []
+
+
 def _usage_from(obj: dict) -> dict | None:
     """response.completed carries response.usage (input/output/total)."""
     if obj.get("type") != "response.completed":
@@ -143,6 +150,10 @@ async def post_responses(
                             break
                         for chunk in _chunks_from(obj):
                             loop.call_soon_threadsafe(queue.put_nowait, chunk)
+                        for r in _reasoning_from(obj):
+                            loop.call_soon_threadsafe(
+                                queue.put_nowait,
+                                {"type": "reasoning_delta", "content": r})
                 else:
                     body = r.read().decode("utf-8")
                     full = _output_text(body)

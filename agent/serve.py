@@ -883,6 +883,21 @@ async def _execute_turn(
                     "usage": delta["usage"],
                 })
                 continue
+            if delta.get("type") == "reasoning_delta":
+                # Thinking stream: broadcast live for the thought section,
+                # kept out of output/round text/history. The model already
+                # saw it (it wrote it); persisting it would pollute answers
+                # and folds, and its fences must never reach tool parsing.
+                content = delta.get("content", "")
+                if isinstance(content, str) and content:
+                    await broadcast({
+                        "type": "reasoning_delta",
+                        "content": content,
+                        "turn_id": turn.get("id", ""),
+                        "thread_id": thread_id,
+                        "round": rnd,
+                    })
+                continue
             turn["output"].append(delta)
             if delta.get("type") == "text_delta":
                 chunk = delta.get("content", "")

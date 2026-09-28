@@ -5,7 +5,7 @@ from typing import AsyncIterator
 
 from .base import BaseProvider, BROWSER_UA
 from .media import anthropic_blocks, flatten_messages
-from .streaming import anthropic_chunks, anthropic_usage, post_sse
+from .streaming import anthropic_chunks, anthropic_reasoning, anthropic_usage, post_sse
 
 logger = logging.getLogger("providers.anthropic")
 
@@ -47,6 +47,7 @@ class AnthropicProvider(BaseProvider):
             async for delta in post_sse(
                 url, headers, payload, anthropic_chunks,
                 usage_from=anthropic_usage,
+                reasoning_from=anthropic_reasoning,
             ):
                 yield delta
             yield {"type": "complete"}

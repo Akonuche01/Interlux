@@ -6,7 +6,7 @@ from typing import AsyncIterator
 from .base import BaseProvider, BROWSER_UA
 from .media import flatten_messages, openai_blocks
 from .responses import ResponsesUnsupported, post_responses
-from .streaming import openai_chunks, openai_usage, post_sse
+from .streaming import openai_chunks, openai_reasoning, openai_usage, post_sse
 
 logger = logging.getLogger("providers.openai")
 
@@ -67,7 +67,8 @@ class OpenAIProvider(BaseProvider):
         logger.info(f"Connecting to {url}")
         try:
             async for delta in post_sse(
-                url, headers, payload, openai_chunks, usage_from=openai_usage
+                url, headers, payload, openai_chunks, usage_from=openai_usage,
+                reasoning_from=openai_reasoning,
             ):
                 yield delta
             yield {"type": "complete"}
