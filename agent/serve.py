@@ -1087,6 +1087,19 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                         RuntimeError(str(payload["error"])[:500]))
                 else:
                     fut.set_result(payload.get("result"))
+                return None
+            # Kara move: her app answers approval cards with a method-less
+            # frame (Codex wire shape) carrying the fid as id. Route those
+            # to the approval table instead of dropping them — a dropped
+            # answer stalls the turn forever with no error surfaced, which
+            # reads as "answers halfway then nothing lands".
+            fid = payload.get("id")
+            if isinstance(fid, str) and fid in approvals.pending:
+                if "error" in payload:
+                    approvals.approve(fid, "decline")
+                else:
+                    approvals.approve(fid, payload.get("result"))
+                logger.info(f"approval answered method-less: {fid}")
             return None
 
         if method == "capabilities":
