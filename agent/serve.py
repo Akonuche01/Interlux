@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -224,6 +225,28 @@ approvals = ApprovalManager()
 
 RUNNING: dict[str, asyncio.Task] = {}
 
+# Messages the user sent at a turn that is already running, keyed by turn id.
+#
+# This is what makes `turn/steer` mean what its name says. The old
+# implementation killed the running turn and started a new one from the thread's
+# last *recorded* state, so "add this to what you're doing" destroyed the work
+# in progress and restarted from a stale point -- and because it then awaited
+# that new turn before replying, the send button stayed disabled for the whole
+# of it. A message here is picked up at the next round boundary instead: the
+# current round finishes, and the agent continues with the new instruction in
+# hand. Nothing is lost and nothing has to be re-run.
+_pending_steer: dict[str, list[str]] = {}
+
+# How a mid-turn message is presented to the model. Explicit about being a new
+# instruction from the user, and explicit that it does not cancel the work in
+# flight -- otherwise a model reads "also check X" as "stop and do X instead"
+# and abandons the task it was halfway through.
+_steer_prompt = (
+    "\n\n[user, sent while you were working] The user added this to your "
+    "current task. Continue the work in progress and take this into account; "
+    "do not discard what you have already done:\n"
+)
+
 # Epic P: subagents — background turns on child threads for parallel
 # fan-out. Registry is in-memory (results persist in thread history);
 # a daemon restart ends running subagents (documented, never silent:
@@ -232,6 +255,31 @@ _subagents: dict[str, dict] = {}
 _sub_counters: dict[str, int] = {}
 MAX_SUBAGENTS = 8
 SUBAGENT_DEFAULT_ROUNDS = 3
+
+# Runaway backstop for the agentic loop, in rounds.
+#
+# NOT a task budget. The loop normally ends when the model stops asking for
+# tools, which is the only thing that means the work is done. This number only
+# bounds a model that never stops -- a loop that cannot be trusted to terminate
+# still has to be stoppable, and a runaway turn bills real tokens on every
+# pass.
+#
+# Deliberately enormous, and paired with a wall-clock limit (TURN_TIME_LIMIT_S)
+# as the limit that actually matters. A round-count cap is the wrong unit for
+# real work: the old cap of 8 cut a genuine task off mid-flight, and even 400
+# is only ~45 minutes at a typical 7s round -- so a 30-minute build or training
+# run could still be severed by a number that has nothing to do with how long
+# the work actually takes. Time is the honest unit; rounds exist only to stop a
+# pathological model that returns instantly and would otherwise never reach it.
+#
+# When either limit IS hit the turn is reported as truncated, never finished.
+ROUND_BACKSTOP = 100_000
+
+# Wall-clock ceiling on one turn, in seconds. ~6 hours: long enough that no real
+# task hits it, short enough that a stuck loop is not billed indefinitely. The
+# user can always stop a turn from the UI; this only catches what nobody is
+# watching.
+TURN_TIME_LIMIT_S = 6 * 60 * 60
 
 
 def _child_thread(parent: str) -> str:
@@ -452,6 +500,52 @@ def preamble_text(state: dict) -> str:
     return f"{developer or DEFAULT_IDENTITY}\n\n{agency_text()}"
 
 
+def _result_output_text(result) -> str:
+    """A tool's result as the text a person would want to read.
+
+    Tools return a dict with their own shape -- shell returns
+    stdout/stderr/exit_code, others return a status and one payload field --
+    so this pulls out whatever is worth showing rather than dumping JSON, which
+    is what put `[fs_read]: {"ok": true}` into the transcript before.
+    """
+    if not isinstance(result, dict):
+        return str(result) if result is not None else ""
+    parts: list[str] = []
+    for key in ("stdout", "output", "text", "content", "diff", "summary",
+                "message", "data"):
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(value.rstrip())
+    if not parts:
+        return ""
+    out = "\n".join(parts)
+    code = result.get("exit_code")
+    if isinstance(code, int) and code != 0:
+        out += f"\n[exit {code}]"
+    return out
+
+
+def _drain_steer(turn_id: str) -> str:
+    """Take the messages queued for this turn and return them as one block.
+
+    Returns "" when there were none. Called at the round boundary. Draining
+    (rather than peeking) is deliberate: a message is consumed exactly once, so
+    a fold can never apply the same instruction twice.
+    """
+    queued = _pending_steer.get(turn_id)
+    if not queued:
+        return ""
+    _pending_steer.pop(turn_id, None)
+    text = "\n".join(queued)
+    audit.append({
+        "type": "steer_applied",
+        "turn_id": turn_id,
+        "messages": [m[:200] for m in queued],
+    })
+    logger.info(f"steer applied to {turn_id}: {text[:200]}")
+    return text
+
+
 async def run_tool_loop(turn: dict, client_socket) -> None:
     """Execute tool calls with approval flow."""
     tool_calls = turn.get("tool_calls", [])
@@ -559,6 +653,29 @@ async def run_tool_loop(turn: dict, client_socket) -> None:
                 logger.info(f"Tool result: {result}")
                 tool_output = {"tool": tool_name, "result": result}
                 turn["output"].append(tool_output)
+                # Broadcast the output as a delta so the activity card can fill
+                # in as the command runs.
+                #
+                # Without this the card knew only *that* a tool was called and
+                # never *what it printed*: `item/started` carries the label and
+                # `item/completed` carries only a status, so the row stayed
+                # empty for the whole call and the command's output appeared
+                # nowhere on screen. The tools capture stdout/stderr already
+                # (see tools/shell.py); this is what puts it on the wire.
+                #
+                # Sent on completion rather than streamed live — these tools
+                # return one dict when the process exits, so there is nothing
+                # to stream. What this fixes is the empty card, and it arrives
+                # the moment the command finishes instead of never.
+                _out = _result_output_text(result)
+                if _out:
+                    await broadcast({
+                        "type": "item/output",
+                        "item_id": item_id,
+                        "turn_id": turn.get("id"),
+                        "thread_id": thread_id,
+                        "output": _out,
+                    })
                 await broadcast({"type": "tool_result", **tool_output})
                 status = result.get("status", "success") if isinstance(
                     result, dict) else "success"
@@ -620,13 +737,31 @@ async def _execute_turn(
 
     turn["output"] = []
     turn["rounds"] = 0
-    # Epic J: bounded agentic loop. max_rounds=1 (default) is today's exact
-    # behavior; higher lets the model see tool results and continue.
+    turn["truncated"] = False
+    # Wall-clock budget for this turn, in seconds. Time is the honest unit for
+    # "how long may this run" -- a round count cannot tell a 30-minute training
+    # run from a 30-second one, and a cap in the wrong unit is what severed real
+    # work before. Checked at the round boundary, so a long tool call is never
+    # cut off mid-flight; only the loop continuing past it can trip this.
+    _deadline = time.monotonic() + TURN_TIME_LIMIT_S
+    # The agentic loop is no longer round-capped. It used to be: 8 from Kara,
+    # clamped to 10 here, and it cut turns off mid-task -- 17 tool calls'
+    # worth of results never made it into an answer, and because the last round
+    # was stamped `final`, the client reported a truncated turn as a finished
+    # one. That is the "says Done while still working" and "ends half" report.
+    #
+    # The loop now ends when the model stops asking for tools, which is the
+    # only condition that actually means the work is done. The bound below is a
+    # runaway backstop, not a budget: it exists so a model that never stops
+    # calling tools cannot spin forever, and it is set far above any real task.
     try:
-        max_rounds = int(params.get("max_rounds", 1) or 1)
+        max_rounds = int(params.get("max_rounds", 0) or 0)
     except (TypeError, ValueError):
-        max_rounds = 1
-    max_rounds = max(1, min(max_rounds, 10))
+        max_rounds = 0
+    if max_rounds <= 0:
+        max_rounds = ROUND_BACKSTOP
+    else:
+        max_rounds = max(1, min(max_rounds, ROUND_BACKSTOP))
 
     # Single-message providers only ever see the last user message, so the
     # identity + tool prompt must ride INSIDE it (system roles are built
@@ -659,7 +794,8 @@ async def _execute_turn(
                 round_text_parts.append(delta.get("content", ""))
             if delta.get("type") == "error":
                 has_error = True
-            await _send_delta(delta, turn.get("id", ""), thread_id)
+            await _send_delta(delta, turn.get("id", ""), thread_id,
+                              round_no=rnd)
 
         # This round's model text (history/context folding happens below).
         round_text = "".join(round_text_parts)
@@ -734,14 +870,73 @@ async def _execute_turn(
                 "parameters": {"command": command}
             }]
 
+        # Announce this round before acting on it. The client cannot classify
+        # model text on its own -- narration and the final answer are the same
+        # shape -- so the daemon, which knows whether it is about to loop again,
+        # says so. `final` is computed from the same two conditions the loop
+        # below exits on, so it cannot disagree with what actually happens: no
+        # tool calls means this round was the answer, and reaching max_rounds
+        # means no further round will revise it.
+        will_loop = bool(turn["tool_calls"]) and rnd < max_rounds
+        if round_text:
+            await broadcast({
+                "type": "round/completed",
+                "turn_id": turn["id"],
+                "thread_id": thread_id,
+                "round": rnd,
+                "text": round_text,
+                # Not `final` when the backstop is what stopped the loop: the
+                # model still wanted to keep going, so this round is working
+                # narration and claiming otherwise is what told the client a
+                # half-finished turn was complete.
+                "final": not will_loop and not turn.get("truncated"),
+                "truncated": bool(turn.get("truncated")),
+            })
+
+        # Wall-clock ceiling. Checked at the round boundary, so a long tool call
+        # is never severed mid-flight -- only the loop choosing to continue past
+        # it can trip this. `time` is the honest unit for "how long may this
+        # run"; a round count cannot tell a 30-minute training run from a
+        # 30-second one, and that wrong unit is what cut real work short.
+        if time.monotonic() > _deadline:
+            logger.info(
+                f"turn time limit ({TURN_TIME_LIMIT_S}s) reached — TRUNCATED "
+                f"after {rnd} rounds"
+            )
+            turn["truncated"] = True
+            break
+
         if not turn["tool_calls"]:
+            # The model asked for nothing more. If the user spoke up while this
+            # round was running, that message is the answer to a question they
+            # asked mid-task, so it earns a round of its own rather than being
+            # dropped -- an instruction the user typed must never be silently
+            # discarded. No sentinel tool call: the fold is what actually
+            # carries the message into the next round.
+            _steered = _drain_steer(turn["id"])
+            if _steered:
+                working_content += _steer_prompt + _steered
+                continue
             break  # pure answer — done
+
+        # A message sent while this round was running joins the next one. The
+        # current round is left alone: it is real work, and restarting it would
+        # throw away whatever the agent just did.
+        _steered = _drain_steer(turn["id"])
+        if _steered:
+            working_content += _steer_prompt + _steered
+            logger.info(f"steer folded into round {rnd + 1}")
 
         mark = len(turn["output"])
         await run_tool_loop(turn, client_socket)
 
         if rnd >= max_rounds:
-            logger.info(f"max_rounds ({max_rounds}) reached — stopping")
+            # The backstop, not a budget. Mark the turn truncated so the client
+            # stops calling it finished -- the old code just broke here and the
+            # last round was stamped `final`, which is how a cut-off turn
+            # rendered as a completed one.
+            logger.info(f"round backstop ({max_rounds}) reached — TRUNCATED")
+            turn["truncated"] = True
             break
         # Fold this round (model text + tool outcomes) into next round's
         # context. Providers stay single-message; the fold carries history.
@@ -779,6 +974,11 @@ async def _execute_turn(
         "mode": turn.get("mode", "exec"),
         "tools": tools_run,
         "items": items,
+        # The turn stopped because the backstop was hit, not because the work
+        # was done. The client needs this to stop reporting an unfinished turn
+        # as a finished one.
+        "truncated": bool(turn.get("truncated")),
+        "rounds": turn["rounds"],
     }
     if turn.get("usage"):
         completed["usage"] = turn["usage"]
@@ -1525,9 +1725,21 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
             }
 
         if method == "turn/steer":
-            # M4: redirect a thread mid-flight. Cancels the running turn
-            # (if any), records the steer message, optionally starts a new
-            # turn carrying it. Turn params may ride along for the new turn.
+            # Redirect a thread mid-flight, WITHOUT destroying the work in
+            # progress.
+            #
+            # This used to kill the running turn and start a new one from the
+            # thread's last *recorded* state, then await that new turn before
+            # replying. Three consequences, all of them the bug: the work
+            # already done was thrown away, the agent restarted from a stale
+            # point, and -- because the reply did not arrive until the new turn
+            # finished -- the client's send button stayed disabled for the whole
+            # of it, so steering was unreachable in practice.
+            #
+            # Now: a running turn picks the message up at its next round
+            # boundary and carries on. If nothing is running, this is an ordinary
+            # first message and starts a turn as before. Either way the reply is
+            # immediate.
             tid = str(params.get("thread_id") or "").strip()
             message = str(params.get("message") or "").strip()
             if not tid or not message:
@@ -1541,23 +1753,41 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                 start = start.lower() not in ("false", "0", "no")
             else:
                 start = bool(start)
-            cancelled = False
             prefix = f"{tid}:"
             hit = next(
                 (key for key in RUNNING if key.startswith(prefix)), None,
             )
-            if hit is not None:
+            running = hit is not None and not RUNNING[hit].done()
+            if running and not start:
+                # The common case: the agent is working and the user has typed
+                # something. Hand it over and return. Nothing is cancelled.
+                _pending_steer.setdefault(hit, []).append(message)
+                audit.append({"type": "steer", "thread_id": tid,
+                              "turn_id": hit, "cancelled": False,
+                              "applied": "queued", "message": message[:500]})
+                logger.info(f"steer queued for running turn {hit}")
+                return {"id": request_id, "result": {
+                    "thread_id": tid,
+                    "turn_id": hit,
+                    "turnId": hit,
+                    "cancelled": False,
+                    "applied": "queued",
+                    "steered": True,
+                }}
+            cancelled = False
+            if running:
+                # Explicit replacement was asked for: stop the old turn first.
                 task = RUNNING[hit]
-                if not task.done():
-                    kill_turn(hit)
-                    approvals.drop_thread(tid)
-                    task.cancel()
-                    cancelled = True
-                    try:
-                        await asyncio.wait_for(task, timeout=10)
-                    except (asyncio.CancelledError, asyncio.TimeoutError,
-                            Exception):
-                        pass
+                kill_turn(hit)
+                approvals.drop_thread(tid)
+                task.cancel()
+                cancelled = True
+                try:
+                    await asyncio.wait_for(task, timeout=10)
+                except (asyncio.CancelledError, asyncio.TimeoutError,
+                        Exception):
+                    pass
+                _pending_steer.pop(hit, None)
             state, source = materialize_state(tid)
             if source == "new" and not cancelled:
                 return {
@@ -1805,7 +2035,7 @@ async def stream_turn(
 
 
 async def _send_delta(delta: dict, turn_id: str = "",
-                      thread_id: str = "") -> None:
+                      thread_id: str = "", round_no: int = 0) -> None:
     logger.info(f"_send_delta called with delta={delta}")
     content = delta.get("content", delta.get("message", ""))
     logger.info(f"Broadcasting: type={delta.get('type')}, content={content}")
@@ -1814,6 +2044,13 @@ async def _send_delta(delta: dict, turn_id: str = "",
         payload["turn_id"] = turn_id
     if thread_id:
         payload["thread_id"] = thread_id
+    # Which pass of the agentic loop produced this text. Round 1 narrates
+    # ("let me look at X"), the last round answers. A client cannot tell those
+    # apart from the text alone, and guessing wrong either buries the answer
+    # in a log or floods the chat with narration -- so the daemon, which knows
+    # whether it will loop again, says so. See `_round_item_key` in Kara's
+    # iagent_client.dart, which keys one message item per round.
+    payload["round"] = round_no
     await broadcast(payload)
 
 

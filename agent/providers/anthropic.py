@@ -4,7 +4,7 @@ import logging
 from typing import AsyncIterator
 
 from .base import BaseProvider
-from .media import anthropic_blocks
+from .media import anthropic_blocks, flatten_messages
 from .streaming import anthropic_chunks, anthropic_usage, post_sse
 
 logger = logging.getLogger("providers.anthropic")
@@ -28,7 +28,9 @@ class AnthropicProvider(BaseProvider):
             "Content-Type": "application/json",
             "anthropic-version": "2023-06-01",
         }
-        text = messages[-1].get("content", "") if messages else ""
+        # The whole conversation, not just the last message -- see the note in
+        # openai.py. Reading `messages[-1]` discarded the thread's history.
+        text = flatten_messages(messages)
         if not isinstance(text, str):
             text = ""
         payload = {

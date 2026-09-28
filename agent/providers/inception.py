@@ -7,7 +7,7 @@ import ssl
 from typing import AsyncIterator
 
 from .base import BaseProvider
-from .media import openai_blocks
+from .media import flatten_messages, openai_blocks
 
 logger = logging.getLogger("providers.inception")
 
@@ -27,7 +27,9 @@ class InceptionProvider(BaseProvider):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        text = messages[-1].get("content", "") if messages else ""
+        # The whole conversation, not just the last message -- see the note in
+        # openai.py. Reading `messages[-1]` discarded the thread's history.
+        text = flatten_messages(messages)
         if not isinstance(text, str):
             text = ""
         payload = {

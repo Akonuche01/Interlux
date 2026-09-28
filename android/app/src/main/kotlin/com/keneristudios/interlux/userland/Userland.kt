@@ -121,7 +121,45 @@ object Userland {
     //   all still running the older code on device. Assets synced, marker
     //   bumped so this takes effect. wipeExceptHome keeps home/, so
     //   providers.json and the API key survive the re-extract.
-    private const val VERSION = "full-tools-42"
+    // v43 (round classification): each round of the agentic loop is now
+    //   announced as `round/completed` with `final` set from the loop's own
+    //   exit condition, and every delta carries its `round` number. Without
+    //   it the client could not tell narration from the answer -- both are the
+    //   same shape -- and fused them into one message, so the whole wall of
+    //   working narration was delivered as the reply instead of staying in the
+    //   activity card. Marker bumped; wipeExceptHome keeps home/, so
+    //   providers.json and the API key survive the re-extract.
+    // v44 (conversation memory): every provider read `messages[-1]` -- only the
+    //   LAST message -- so the history `build_messages` had assembled was
+    //   discarded one line before the wire, in openai.py, anthropic.py and
+    //   inception.py alike. The daemon saved every turn and read it back, so
+    //   history existed on disk, in the RPC payload and in the audit trail the
+    //   whole time, and the model still began every turn amnesiac. That is why
+    //   Kara could not answer a question she had asked herself a moment
+    //   earlier. Providers now send the whole labelled conversation via
+    //   flatten_messages (media.py). Marker bumped; wipeExceptHome keeps
+    //   home/, so providers.json and the API key survive the re-extract.
+    // v45 (tool output on the wire): the tools always captured stdout/stderr,
+    //   but the result was only ever stored and summarised into history -- the
+    //   daemon never broadcast it. `item/started` carries a label and
+    //   `item/completed` carries only a status, so the activity row stayed
+    //   empty for the whole call: the card said a command had run and never
+    //   said what it was or what it printed. The daemon now broadcasts
+    //   `item/output` (serve.py `_result_output_text`), which Kara maps onto a
+    //   commandExecution outputDelta on the row already on screen.
+    // v46 (no round cap + real steering):
+    //   * Round cap removed. It was 8 from Kara, clamped to 10 here, and hitting
+    //     it severed real work mid-task -- 17 tool calls' results never reached
+    //     an answer -- while the turn was still reported as finished, which is
+    //     the "Done while still working" and "ends half" report. The loop now
+    //     ends when the model stops asking for tools. ROUND_BACKSTOP (100k) and
+    //     TURN_TIME_LIMIT_S (6h) only catch a model that never stops, and a turn
+    //     they cut short is now marked `truncated` rather than `final`.
+    //   * `turn/steer` no longer kills the running turn and awaits a
+    //     replacement. It queues the message, which the running turn picks up at
+    //     its next round boundary, and replies immediately -- that reply was
+    //     what kept the client's send button disabled for the whole turn.
+    private const val VERSION = "full-tools-46"
     private const val ASSET_DIR = "userland"
     private const val DIR_NAME = "userland"
 

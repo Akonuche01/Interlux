@@ -4,7 +4,7 @@ import logging
 from typing import AsyncIterator
 
 from .base import BaseProvider
-from .media import openai_blocks
+from .media import flatten_messages, openai_blocks
 from .responses import ResponsesUnsupported, post_responses
 from .streaming import openai_chunks, openai_usage, post_sse
 
@@ -27,7 +27,10 @@ class OpenAIProvider(BaseProvider):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        text = messages[-1].get("content", "") if messages else ""
+        # The WHOLE conversation, not just the last message. Reading
+        # `messages[-1]` here discarded the history `build_messages` assembled,
+        # so the model started every turn amnesiac.
+        text = flatten_messages(messages)
         if not isinstance(text, str):
             text = ""
 
