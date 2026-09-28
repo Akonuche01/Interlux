@@ -230,6 +230,14 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   Live proof across 3 sockets: asked, flapped, re-sent, late accept
   executed, turn completed. Policy default now atria (switch went
   through).
+- Reasoning pipeline 2026-09-28 (boss: thought section always empty):
+  extractors in streaming/responses parsers (reasoning_content,
+  thinking_delta, reasoning summaries), reasoning_delta broadcast kept
+  out of answers/history, adapter maps to thinking rows (open once,
+  stream in). Host + live proven; fills only when the model emits
+  thinking (flash models don't). Live notes: tokenharbor 402 (billing),
+  apinex non-free models 402 — free/* models work; atria 400 earlier
+  was a mispaired-model test artifact.
 - Provider parity 2026-09-28 (boss: no hardcoded provider names):
   model/list passes file-configured custom providers through (was a
   hard unknown-provider refusal in the handler); delete fallback picks
