@@ -1392,15 +1392,19 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                         audit.append({"type": "provider_config",
                                       "provider": name, "deleted": True})
                         # Never leave the default pointing at a gone block:
-                        # fall back to a keyed tokenharbor when there is
-                        # one, else clear to the built-in default.
+                        # fall back to the first still-configured provider
+                        # that holds a key, else clear to the built-in
+                        # default. No hardcoded names: whichever provider
+                        # the user actually configured wins.
                         try:
                             policy = load_policy()
                             if policy.get("default_provider") == name:
-                                th = data.get("tokenharbor")
-                                if isinstance(th, dict) and str(
-                                        th.get("api_key", "") or ""):
-                                    policy["default_provider"] = "tokenharbor"
+                                other = sorted(
+                                    k for k, s in data.items()
+                                    if isinstance(s, dict) and str(
+                                        s.get("api_key", "") or ""))
+                                if other:
+                                    policy["default_provider"] = other[0]
                                 else:
                                     policy.pop("default_provider", None)
                                 save_policy(policy)
@@ -1495,16 +1499,18 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
         if method == "model/list":
             # Per-provider model enumeration: config override > live
             # /models > curated fallback. Never carries secrets.
+            # File-configured custom providers pass through to list_models
+            # (which tolerates them); only truly unknown names are refused.
             name = str(params.get("provider") or "")
             if name:
-                if name not in PROVIDERS:
+                try:
+                    return {"id": request_id,
+                            "result": await list_models(name)}
+                except ValueError as e:
                     return {
                         "id": request_id,
-                        "error": {"code": -32602,
-                                 "message": f"unknown provider: {name}"},
+                        "error": {"code": -32602, "message": str(e)},
                     }
-                return {"id": request_id,
-                        "result": await list_models(name)}
             results = await asyncio.gather(*[
                 list_models(p) for p in PROVIDERS
             ])
