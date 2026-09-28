@@ -224,6 +224,11 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   end-to-end with safe default fallback (typo key deleted live).
   Vyceai roster failure = bad saved key (endpoint verified 401 without
   key); user re-enters key to finish the switch.
+- Provider parity 2026-09-28 (boss: no hardcoded provider names):
+  model/list passes file-configured custom providers through (was a
+  hard unknown-provider refusal in the handler); delete fallback picks
+  first keyed provider dynamically. Live: apinex/vyceai1 list empty
+  (keys rejected upstream). vyceai1 base URL has a typo (.con).
 - Chat rendering fix 2026-09-28 (boss: call blocks leak as bubbles, no
   thought/activity): fence-aware live send; scrub removes ALL blocks
   (was first-only — multi-call rounds leaked); convergence guard runs
