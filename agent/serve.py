@@ -815,6 +815,8 @@ async def _execute_turn(
                                           extra_system)
         has_error = False
         round_text_parts: list[str] = []
+        # Shadow buffer for fence tracking (live-send gating above).
+        fence_buf = ""
         # Output index where this round's deltas start (used to re-record
         # cleaned text after tool-call scrubbing below).
         round_mark = len(turn["output"])
@@ -832,7 +834,21 @@ async def _execute_turn(
                 continue
             turn["output"].append(delta)
             if delta.get("type") == "text_delta":
-                round_text_parts.append(delta.get("content", ""))
+                chunk = delta.get("content", "")
+                round_text_parts.append(chunk)
+                # Fence-aware live send: the model wraps tool calls in
+                # ```json fences that fragment across chunks. Anything
+                # streamed inside (or as part of) a fence renders as raw
+                # call syntax in the chat -- the wall of JSON bubbles. Hold
+                # fenced chunks back, including the chunk that closes the
+                # fence; the scrubbed whole-round text goes out on
+                # round/completed and the client replaces these rows with
+                # it. Pre-fence narration still streams live.
+                if isinstance(chunk, str):
+                    odd_before = fence_buf.count("```") % 2 == 1
+                    fence_buf += chunk
+                    if odd_before or "```" in chunk:
+                        continue
             if delta.get("type") == "error":
                 has_error = True
             await _send_delta(delta, turn.get("id", ""), thread_id,
@@ -916,6 +932,11 @@ async def _execute_turn(
             # render those as activity.)
             block_re = re.compile(r'```json\s*.*?\s*```', re.DOTALL)
             stripped, n = block_re.subn("", round_text, count=1)
+            if not n:
+                # Unclosed fence (model stopped mid-block): strip from the
+                # fence to the end so a dangling opener never reaches chat.
+                stripped, n = re.subn(r'```json\s*.*$',
+                                      "", round_text, count=1, flags=re.DOTALL)
             if n:
                 round_text = stripped.strip()
                 turn["output"] = [
