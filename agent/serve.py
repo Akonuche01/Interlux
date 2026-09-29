@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import AsyncIterator
 
 from .audit import AuditLog
+from . import agents as agents_mod
 from . import mcp as mcp_mod
 from .pconfig import (
     CONFIG_SECTIONS,
@@ -260,6 +261,66 @@ approvals = ApprovalManager()
 
 RUNNING: dict[str, asyncio.Task] = {}
 
+# Step 1 (multi-agent platform): socket -> agent identity. Sockets are
+# keyed by id() (same discipline as transport's send locks); the reverse
+# map lets revoke drop an agent's live connections. Both are forgotten
+# on disconnect (see _forget_socket, registered in main).
+_sock_agents: dict[int, str] = {}
+_agent_socks: dict[str, set] = {}
+
+
+def _remember_socket(client_socket, agent_id: str) -> None:
+    if client_socket is None:
+        return
+    key = id(client_socket)
+    old = _sock_agents.get(key)
+    if old is not None and old != agent_id:
+        try:
+            _agent_socks.get(old, set()).discard(client_socket)
+        except Exception:
+            pass
+    _sock_agents[key] = agent_id
+    _agent_socks.setdefault(agent_id, set()).add(client_socket)
+
+
+def _drop_socket(client_socket) -> None:
+    try:
+        agent_id = _sock_agents.pop(id(client_socket), None)
+        if agent_id is not None:
+            try:
+                _agent_socks.get(agent_id, set()).discard(client_socket)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _caller_agent(client_socket) -> str | None:
+    try:
+        return _sock_agents.get(id(client_socket))
+    except Exception:
+        return None
+
+
+def _agents_configured() -> bool:
+    """True once at least one agent is paired (gate is live)."""
+    try:
+        return bool(agents_mod.load_agents())
+    except Exception:
+        return False
+
+
+# Methods reachable without a paired agent: self-description,
+# handshake, and the pairing plane itself (owner-gated inside).
+_PUBLIC_METHODS = ("capabilities", "initialize",
+                   "pairing/list", "pairing/approve",
+                   "pairing/deny", "pairing/revoke")
+
+
+def _not_paired(request_id) -> dict:
+    return {"id": request_id, "error": {
+        "code": -32001, "message": "not paired: complete pairing first"}}
+
 # Messages the user sent at a turn that is already running, keyed by turn id.
 #
 # This is what makes `turn/steer` mean what its name says. The old
@@ -407,7 +468,7 @@ async def _resend_approvals(ws) -> None:
             logger.exception(f"resend of {fid} failed")
 
 
-def drop_client_waits() -> None:
+def drop_client_waits(_ws=None) -> None:
     """Disconnect hook: no orphaned wait may outlive its client.
 
     Approvals past their TTL are denied; fresh ones stay open for the
@@ -500,6 +561,177 @@ async def _call_client_tool(name: str, arguments: dict, thread_id: str = "",
     finally:
         _tool_call_pending.pop(fid, None)
     return _normalize_client_result(res, name)
+
+
+def _scrub_fold_echo(text: str) -> str:
+    """Drop a replayed fold block out of a round's model text.
+
+    The loop folds each round's text plus its tool results into the next
+    round's user-role message, wrapped in <assistant_work>. A model asked to
+    answer from that context sometimes quotes the block back verbatim, and the
+    quote reads as fresh output -- the bracket labels and the [tool] result
+    lines are then broadcast to the client as the turn's answer.
+
+    Matching is deliberately narrow: a whole fenced block, or a run of lines
+    that are only fold labels and [tool]/[error] result lines. Prose that
+    merely mentions a tool name, or a shell command the model is reasoning
+    about in its own words, is left alone -- a real answer that happens to
+    contain the word "shell" must survive.
+    """
+    if not text:
+        return text
+    import re
+
+    # Whole block, if the model reproduced the fence.
+    stripped = re.sub(
+        r"<assistant_work\b.*?</assistant_work>", "", text,
+        flags=re.DOTALL,
+    ).strip()
+    # Unclosed opener: drop it and everything after, same as the dangling
+    # ```json case -- a half-quoted fold is not a usable answer.
+    if stripped != text:
+        stripped = re.sub(r"<assistant_work\b.*$", "", stripped,
+                          flags=re.DOTALL).strip()
+        return stripped
+    if "<assistant_work" in text:
+        return re.sub(r"<assistant_work\b.*$", "", text,
+                      flags=re.DOTALL).strip()
+
+    # Unfenced echo: the [assistant round N]: header plus the [tool] lines
+    # fold_output emits. A line qualifies only if it is one of those labels
+    # at the start of a line, so a sentence mentioning a tool is not eaten.
+    label = re.compile(
+        r"^\[assistant round \d+\]:", re.MULTILINE)
+    result_line = re.compile(
+        r"^\[(?:shell|fs_list|fs_read|fs_write|git|websearch|exec|"
+        r"pty_run|pkg|image|plugins|tabs|track|review|mcp|error|[a-z_]+)"
+        r"\][ \t]", re.MULTILINE)
+
+    out: list[str] = []
+    for line in text.splitlines():
+        if label.match(line) or result_line.match(line):
+            continue
+        out.append(line)
+    cleaned = "\n".join(out).strip()
+    # Only accept the stripped form when it actually removed fold syntax,
+    # so ordinary answers are never rewritten by this.
+    return cleaned if len(cleaned) < len(text.strip()) else text
+
+
+def _normalize_calls(parsed) -> list[dict]:
+    """One call shape out of the several a model writes.
+
+    The documented shape is [{"tool": ..., "parameters": {...}}], but models
+    also emit a bare object, a {"tool_calls": [...]} wrapper, the OpenAI wire
+    naming (name/arguments), and a flat object that carries its parameters as
+    sibling keys. All of those are accepted. Anything without a tool name is
+    not a call and is dropped -- that guard is what keeps ordinary JSON in an
+    answer from being executed as a tool request.
+    """
+    if isinstance(parsed, dict):
+        inner = parsed.get("tool_calls")
+        parsed = inner if isinstance(inner, list) else [parsed]
+    if not isinstance(parsed, list):
+        return []
+    out: list[dict] = []
+    skip = {"tool", "name", "tool_name", "parameters", "arguments", "params",
+            "tool_calls"}
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        tool = item.get("tool") or item.get("name") or item.get("tool_name")
+        if not isinstance(tool, str) or not tool:
+            continue
+        params = item.get("parameters")
+        if params is None:
+            params = item.get("arguments")
+        if params is None:
+            params = item.get("params")
+        if isinstance(params, str):
+            try:
+                params = json.loads(params)
+            except (json.JSONDecodeError, ValueError):
+                params = {}
+        if not isinstance(params, dict):
+            params = {}
+        if not params:
+            # Flat shape: parameters ride as sibling keys.
+            params = {k: v for k, v in item.items() if k not in skip}
+        out.append({"tool": tool, "parameters": params})
+    return out
+
+
+def _json_span(text: str):
+    """The first parseable JSON array/object inside `text`, or None."""
+    for opener, closer in (("[", "]"), ("{", "}")):
+        i = text.find(opener)
+        j = text.rfind(closer)
+        if i != -1 and j > i:
+            try:
+                return json.loads(text[i:j + 1])
+            except (json.JSONDecodeError, ValueError):
+                continue
+    return None
+
+
+def _extract_tool_calls(text: str) -> tuple[list, str, bool]:
+    """(calls, cleaned_text, found_syntax) for one round of model output.
+
+    The prompt asks for a fenced ```json block and most rounds oblige -- but
+    the closing fence belongs to the model, and it forgets it often: Atria
+    writes the opener, the JSON, and then simply stops. Requiring both fences
+    meant such a round parsed to zero calls, so the tool never ran *and* the
+    bare fence was persisted and rendered in chat as the turn's answer, since
+    the scrub that removes it was itself gated on having parsed a call.
+
+    So three shapes are accepted: closed fences (all of them -- a round can
+    carry several calls), an unclosed trailing fence, and a fence-less JSON
+    payload that names a tool. `found_syntax` is reported so the caller can
+    strip what was matched even when nothing parsed, which is the case that
+    must never reach the chat window.
+    """
+    if not text:
+        return [], text, False
+    import re as _re
+
+    calls: list[dict] = []
+    cleaned = text
+    found = False
+
+    closed = _re.compile(r"```[ \t]*json[ \t]*\r?\n?(.*?)```", _re.DOTALL)
+    blocks = closed.findall(text)
+    if blocks:
+        found = True
+        cleaned = closed.sub("", text)
+        for block in blocks:
+            calls.extend(_normalize_calls(_json_span(block)))
+    else:
+        # Unclosed fence: opener through the end of the round.
+        m = _re.search(r"```[ \t]*json[ \t]*\r?\n?(.*)$", text, _re.DOTALL)
+        if m:
+            found = True
+            cleaned = text[:m.start()]
+            calls.extend(_normalize_calls(_json_span(m.group(1))))
+        else:
+            # No fence at all. Deliberately strict -- a JSON *list* of objects
+            # that each name a tool, nothing looser. The prompt asks for the
+            # fence, so an unfenced payload is the rare case, and requiring
+            # the exact documented shape is what keeps a code sample inside a
+            # real answer from being executed as a tool request.
+            parsed = _json_span(text)
+            if isinstance(parsed, list) and parsed and all(
+                isinstance(x, dict)
+                and isinstance(x.get("tool") or x.get("name"), str)
+                for x in parsed
+            ):
+                calls = _normalize_calls(parsed)
+                if calls:
+                    i = text.find("[")
+                    j = text.rfind("]")
+                    cleaned = text[:i] + text[j + 1:]
+                    found = True
+
+    return calls, cleaned.strip(), found
 
 
 def _tool_output_status(output: dict) -> str:
@@ -944,56 +1176,41 @@ async def _execute_turn(
                 result["usage"] = turn["usage"]
             return {"id": payload.get("id"), "result": result}
 
-        # Parse tool calls from this round's content only.
-        tool_calls: list = []
-        if round_text:
-            import re
-            # Look for JSON blocks like ```json {...} ```
-            json_blocks = re.findall(r'```json\s*(.*?)\s*```', round_text, re.DOTALL)
-            if json_blocks:
-                try:
-                    tool_calls = json.loads(json_blocks[0])
-                    if isinstance(tool_calls, list):
-                        pass
-                    elif "tool_calls" in tool_calls:
-                        tool_calls = tool_calls["tool_calls"]
-                    else:
-                        tool_calls = []
-                except json.JSONDecodeError:
-                    tool_calls = []
-                if not isinstance(tool_calls, list):
-                    tool_calls = []
+        # Parse tool calls out of this round's content, and take the call
+        # syntax back out of the text in the same pass. The fold echo is
+        # stripped first so a quoted context block can never be mistaken for
+        # a tool request. See _extract_tool_calls: the fence the prompt asks
+        # for is not always the fence the model writes, and a call the parser
+        # misses is a call that silently never runs.
+        #
+        # The re-record below is deliberately keyed on the text having
+        # changed, not on a call having parsed. The old code gated it on
+        # `tool_calls`, so a round whose call block failed to parse kept the
+        # raw fence in turn["output"] -- which put machine syntax into
+        # persisted history and, worse, into the round/completed text the
+        # client renders as the answer.
+        _round_before = round_text
+        round_text = _scrub_fold_echo(round_text)
+        tool_calls, round_text, _call_syntax = _extract_tool_calls(round_text)
         turn["tool_calls"] = tool_calls
-        if tool_calls:
-            # Hygiene: an executed call block is machine traffic, not chat.
-            # Scrub ALL of them from the JOINED round text (agentic rounds
-            # routinely carry several calls; live chunks fragment the
-            # blocks, so per-entry regex never matches), then re-record
-            # this round's text as one clean entry. Runs BEFORE the
-            # convergence guard below so even the breaker round is clean.
-            # History, resume, and later folds stay clean. (Live deltas
-            # already streamed gated; clients render those as activity.)
-            block_re = re.compile(r'```json\s*.*?\s*```', re.DOTALL)
-            # All of them: agentic rounds routinely carry several calls and
-            # leaving every block after the first is exactly the wall of
-            # JSON bubbles in the chat.
-            stripped, n = block_re.subn("", round_text)
-            if not n:
-                # Unclosed fence (model stopped mid-block): strip from the
-                # fence to the end so a dangling opener never reaches chat.
-                stripped, n = re.subn(r'```json\s*.*$',
-                                      "", round_text, count=1, flags=re.DOTALL)
-            if n:
-                round_text = stripped.strip()
-                turn["output"] = [
-                    e for i, e in enumerate(turn["output"])
-                    if i < round_mark or not (
-                        isinstance(e, dict)
-                        and e.get("type") == "text_delta")
-                ]
-                if round_text:
-                    turn["output"].append(
-                        {"type": "text_delta", "content": round_text})
+        if round_text != _round_before:
+            turn["output"] = [
+                e for i, e in enumerate(turn["output"])
+                if i < round_mark or not (
+                    isinstance(e, dict)
+                    and e.get("type") == "text_delta")
+            ]
+            if round_text:
+                turn["output"].append(
+                    {"type": "text_delta", "content": round_text})
+        if _call_syntax and not tool_calls:
+            # Syntax was there and parsed to nothing. Logged, because this is
+            # the difference between the model asking for nothing and the
+            # model asking for something we failed to read, and the round
+            # looks identical from the client either way.
+            logger.info(
+                f"{turn['id']} round {rnd}: call syntax stripped but parsed "
+                f"to no tool call")
 
         # Convergence guard: a model that re-emits the identical call
         # round after round is stuck, not working. Three repeats ends
@@ -1038,7 +1255,18 @@ async def _execute_turn(
         # tool calls means this round was the answer, and reaching max_rounds
         # means no further round will revise it.
         will_loop = bool(turn["tool_calls"]) and rnd < max_rounds
-        if round_text:
+        # Broadcast whenever this round streamed *anything*, not only when text
+        # survives to here. round/completed is the round's closing event: the
+        # deltas already put a live row on the client's screen, and a round
+        # that ends without one leaves that row open -- no phase, no
+        # completion -- so it renders as a message still being written and then
+        # gets promoted to the turn's final answer. Gating on `round_text`
+        # silently skipped exactly the rounds whose text the scrubs above had
+        # just removed, which is how a scrubbed fold echo outlived its own
+        # removal on the device. An empty `text` here is a real verdict and the
+        # client acts on it; a tool-only round streamed no text, so it stays
+        # silent and no blank row is created.
+        if round_text or round_text_parts:
             await broadcast({
                 "type": "round/completed",
                 "turn_id": turn["id"],
@@ -1100,9 +1328,23 @@ async def _execute_turn(
             break
         # Fold this round (model text + tool outcomes) into next round's
         # context. Providers stay single-message; the fold carries history.
+        #
+        # The fold rides inside the USER-role message (see build_messages),
+        # so without a fence around it the bracket labels read as something
+        # the user said. A model that quotes its own context back then
+        # parrots "[assistant round N]: ..." plus the [shell] lines as fresh
+        # output, and since that echo is usually the last thing said it gets
+        # stamped `final` and lands in chat as the answer. Delimiting it and
+        # naming it as a replay tells the model what the block actually is;
+        # _scrub_fold_echo below catches the ones that quote it anyway.
         working_content += (
-            f"\n\n[assistant round {rnd}]: {round_text}"
+            f"\n\n<assistant_work rounds={rnd}>"
+            " This is a replay of your own earlier work in this turn, "
+            "shown for your reference. It is not a user message. Do not "
+            "repeat it back verbatim.\n"
+            f"[assistant round {rnd}]: {round_text}"
             + fold_output(turn["output"][mark:])
+            + "\n</assistant_work>"
         )
 
     turn["complete"] = True
@@ -1299,6 +1541,15 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                 logger.info(f"approval answered method-less: {fid}")
             return None
 
+        # Step 1 gate (multi-agent platform): past this point every call
+        # needs a paired agent — except the public methods above. Empty
+        # store (fresh install, tests, probes) means setup phase: allow
+        # all, preserving today's behavior exactly until the first agent
+        # pairs, at which point the gate goes live.
+        if method not in _PUBLIC_METHODS and _agents_configured():
+            if _caller_agent(client_socket) is None:
+                return _not_paired(request_id)
+
         if method == "capabilities":
             return {
                 "id": request_id,
@@ -1311,6 +1562,8 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                         "tools/unregister", "policy", "skills", "mcp",
                         "providers", "config/section", "turn/steer",
                         "model/list",
+                        "pairing/list", "pairing/approve",
+                        "pairing/deny", "pairing/revoke",
                         "thread/resume", "thread/fork", "thread/compact",
                         "thread/list", "thread/read", "thread/archive",
                         "thread/unarchive", "thread/unsubscribe",
@@ -1329,6 +1582,61 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                     "approve_scopes": list(GRANT_SCOPES),
                 },
             }
+
+        if method in ("pairing/list", "pairing/approve",
+                        "pairing/deny", "pairing/revoke"):
+            # Owner-only management plane. Empty store: nothing to manage
+            # (and the first client pairs via initialize, not here).
+            me = _caller_agent(client_socket)
+            if not _agents_configured() or me is None or not agents_mod.is_owner(me):
+                return {"id": request_id, "error": {
+                    "code": -32001,
+                    "message": "owner only" if _agents_configured()
+                    else "no agents paired yet"}}
+            if method == "pairing/list":
+                return {"id": request_id, "result": {
+                    "pending": agents_mod.pending_list(),
+                    "agents": agents_mod.public_list(),
+                }}
+            if method == "pairing/deny":
+                pid = str(params.get("id", ""))
+                denied = agents_mod.pop_pairing(pid) is not None
+                audit.append({"type": "pairing", "action": "deny",
+                              "pairing": pid, "by": me})
+                return {"id": request_id, "result": {"denied": denied}}
+            if method == "pairing/approve":
+                pid = str(params.get("id", ""))
+                req = agents_mod.pop_pairing(pid)
+                if req is None:
+                    return {"id": request_id, "error": {
+                        "code": -32602,
+                        "message": "unknown or expired pairing request"}}
+                agent_id, token, public = agents_mod.mint_agent(
+                    req.get("label", ""), owner=False)
+                # Audit carries identity, never the secret (shown once,
+                # in this result only).
+                audit.append({"type": "pairing", "action": "approve",
+                              "agent_id": agent_id,
+                              "label": public["label"], "by": me})
+                logger.info(f"paired agent {agent_id} ({public['label']})")
+                return {"id": request_id, "result": {
+                    "agent_id": agent_id, "token": token}}
+            # pairing/revoke
+            target = str(params.get("agent_id", ""))
+            if not target or target == me:
+                return {"id": request_id, "error": {
+                    "code": -32602,
+                    "message": "cannot revoke that agent"}}
+            revoked = agents_mod.revoke(target)
+            if revoked:
+                for ws in list(_agent_socks.pop(target, set())):
+                    try:
+                        asyncio.create_task(ws.close())
+                    except Exception:
+                        pass
+                audit.append({"type": "pairing", "action": "revoke",
+                              "agent_id": target, "by": me})
+            return {"id": request_id, "result": {"revoked": revoked}}
 
         if method == "tools_refresh":
             # Plugins, skills (incl. their tool dirs), AND MCP servers.
@@ -1687,11 +1995,61 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
             return {"id": request_id, "result": data}
 
         if method == "initialize":
-            # Kara-compat handshake (her client sends this first). Benign
-            # server description; per-turn auth is not required on loopback.
+            # Step 1: pairing-aware handshake. `params.auth` carries
+            # {agent_id, token} once paired. Empty store (fresh install,
+            # tests): the first client auto-becomes the OWNER and gets
+            # its token right here. Otherwise unknown credentials get a
+            # pairing code and nothing else works until approved.
+            auth = params.get("auth") if isinstance(params, dict) else None
+            if not _agents_configured():
+                label = ""
+                if isinstance(auth, dict):
+                    label = str(auth.get("label", ""))
+                if not label and isinstance(params, dict):
+                    info = params.get("clientInfo")
+                    if isinstance(info, dict):
+                        label = str(info.get("name", ""))
+                agent_id, token, public = agents_mod.mint_agent(
+                    label or "first app", owner=True)
+                _remember_socket(client_socket, agent_id)
+                logger.info(f"paired owner {agent_id} ({public['label']})")
+                return {"id": request_id, "result": {
+                    "server": "iagent", "protocol": 1,
+                    "client": params.get("clientInfo", {}) if isinstance(
+                        params, dict) else {},
+                    "agent_id": agent_id,
+                    "paired": True,
+                    "owner": True,
+                    "token": token,
+                }}
+            agent_id, token = "", ""
+            if isinstance(auth, dict):
+                agent_id = str(auth.get("agent_id", ""))
+                token = str(auth.get("token", ""))
+            entry = agents_mod.verify(agent_id, token) if agent_id else None
+            if entry is None:
+                label = ""
+                if isinstance(params, dict):
+                    info = params.get("clientInfo")
+                    if isinstance(info, dict):
+                        label = str(info.get("name", ""))
+                pending = agents_mod.request_pairing(label or "unknown app")
+                return {"id": request_id, "result": {
+                    "server": "iagent", "protocol": 1,
+                    "client": params.get("clientInfo", {}) if isinstance(
+                        params, dict) else {},
+                    "paired": False,
+                    "pairing_required": True,
+                    "pairing": pending,
+                }}
+            _remember_socket(client_socket, agent_id)
             return {"id": request_id, "result": {
                 "server": "iagent", "protocol": 1,
-                "client": params.get("clientInfo", {}),
+                "client": params.get("clientInfo", {}) if isinstance(
+                    params, dict) else {},
+                "agent_id": agent_id,
+                "paired": True,
+                "owner": bool(entry.get("owner")),
             }}
 
         if method == "thread/archive":
@@ -2318,6 +2676,7 @@ def main() -> int:
             if started:
                 logger.info(f"MCP tools ready: {started}")
             on_disconnect.append(drop_client_waits)
+            on_disconnect.append(_drop_socket)
             on_connect.append(_resend_approvals)
             transport = Transport(handle_request, args.port)
             await transport.start()

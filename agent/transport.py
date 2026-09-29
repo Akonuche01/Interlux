@@ -15,10 +15,10 @@ logger = logging.getLogger("transport")
 _active_clients: set[websockets.asyncio.server.ServerConnection] = set()
 _send_locks: dict[int, asyncio.Lock] = {}
 
-# Sync callbacks run when a socket dies (client gone). Used to resolve
-# waits that only that client could answer (approvals, client tools) so
-# turns complete and persist instead of hanging forever.
-on_disconnect: list[Callable[[], None]] = []
+# Sync callbacks run when a socket dies (client gone). They receive the
+# dead socket so per-connection state (agent mapping) can be forgotten;
+# hooks that only need the event itself ignore the argument.
+on_disconnect: list[Callable[[object], None]] = []
 
 # Async callbacks run when a socket connects, with the new socket.
 # Used to re-send state the fresh UI missed (open approval cards).
@@ -97,7 +97,7 @@ class Transport:
             _send_locks.pop(id(websocket), None)
             for hook in list(on_disconnect):
                 try:
-                    hook()
+                    hook(websocket)
                 except Exception:
                     logger.exception("disconnect hook failed")
             for t in list(tasks):
