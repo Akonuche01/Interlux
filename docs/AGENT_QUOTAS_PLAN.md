@@ -7,7 +7,7 @@ docs/AGENT_CREDENTIALS_PLAN.md (step 3 — key isolation).
 
 ## Standing rule
 
-The owner agent (Kara — first paired, flagged `owner` in
+The owner agent (first paired, flagged `owner` in
 `agents.json`) is EXEMPT from every limit below: no concurrency cap,
 no token budget, no turn ceiling beyond the existing global backstop.
 Exempt means exempt, not "high limit": no future default may catch

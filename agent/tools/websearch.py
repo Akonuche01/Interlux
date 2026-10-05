@@ -7,8 +7,8 @@ INTERLUX_PROVIDERS env JSON first, then ~/.interlux/agent/providers.json:
                   "api_key": "...", "path": "/search",
                   "extra": {"search_depth": "basic"}}}
 
-`mode` is Kara's Capabilities toggle landing in the same file the tool
-already reads: `disabled` turns the search away with the reason, and
+`mode` is the client's Capabilities toggle landing in the same file the
+tool already reads: `disabled` turns the search away with the reason, and
 anything else (including an absent mode) searches.
 
 Request shape is Tavily-compatible: {"api_key","query","max_results",...extra}.
@@ -28,7 +28,8 @@ import re
 import urllib.parse
 import urllib.request
 
-from ..pconfig import config_section
+from ..pconfig import config_section, resolve_tool_key
+from ..policy import agent_ctx
 
 TIMEOUT = 20
 RESULT_CAP = 10
@@ -39,7 +40,12 @@ _DDG_LITE = "https://lite.duckduckgo.com/lite/"
 
 
 def _section() -> dict:
-    return config_section("web_search")
+    # Per-agent credentials (step 3): mode/base_url stay global admin
+    # config; the key is the calling agent's own. agent_ctx is set per
+    # turn from socket identity, never from wire params.
+    section = dict(config_section("web_search"))
+    section["api_key"] = resolve_tool_key("web_search", agent_ctx.get(""))
+    return section
 
 
 def _post(url: str, body: dict, timeout: int) -> dict:

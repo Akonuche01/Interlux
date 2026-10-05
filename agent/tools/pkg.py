@@ -1,19 +1,16 @@
 """Bionic package tool (pkg.sh). Read-only `list` runs free; everything else needs approval."""
 
 import asyncio
-import os
 from pathlib import Path
 
+from ..home import engine_home
 from .track import track, untrack
-
-INTERLUX_HOME = "/data/user/0/com.keneristudios.interlux/files/userland/home"
 
 READ_ACTIONS = {"list"}
 
 
 def _pkg_sh() -> Path:
-    home = Path(os.environ.get("HOME") or INTERLUX_HOME)
-    return home.parent / "pkg.sh"
+    return engine_home().parent / "pkg.sh"
 
 
 async def pkg(action: str = "list", packages: list[str] | None = None) -> dict:
@@ -30,13 +27,22 @@ async def pkg(action: str = "list", packages: list[str] | None = None) -> dict:
         )
         key = track(proc)
         try:
-            stdout, stderr = await proc.communicate()
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), 300)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                return {"status": "error",
+                        "message": "timed out after 300s"}
         finally:
             untrack(key)
         return {
             "status": "success" if proc.returncode == 0 else "error",
-            "stdout": stdout.decode() if stdout else "",
-            "stderr": stderr.decode() if stderr else "",
+            "stdout": stdout.decode("utf-8", errors="replace") if stdout else "",
+            "stderr": stderr.decode("utf-8", errors="replace") if stderr else "",
             "exit_code": proc.returncode,
         }
     except Exception as e:

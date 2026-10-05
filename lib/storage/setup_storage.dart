@@ -55,9 +55,12 @@ class StoragePrompt {
       } catch (_) {
         // System dialog unavailable; stop asking.
       }
-      await prefs.setBool(_dismissKey, true);
-    } else if (action == 'later') {
-      await prefs.setBool(_dismissKey, true);
     }
+    // Remember ANY dismissal, not just the two buttons. A barrier tap or Back
+    // returns null, and the class doc promises this is "Shown once" -- so
+    // leaving those unpersisted made an accidental tap outside the dialog
+    // indistinguishable from "Later" and brought the prompt back on every
+    // single cold start.
+    await prefs.setBool(_dismissKey, true);
   }
 }

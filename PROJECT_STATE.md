@@ -180,11 +180,11 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   session stickiness, header auth, loud 401/refused reporting; OAuth
   explicitly deferred app-side). Device proof 5/5 E2E against a local HTTP
   stub (both transports live, approval, restart) + grants/J regression.
-- Kara move-in SHIPPED (read her source 2026-09-27): initialize handshake,
-  thread/archive+unarchive+unsubscribe+name/set, turn/completed items
-  authority, enriched approvals (tool+path), thread/compacted + error +
-  diff/updated notifications, notifications get no reply. Device proof
-  15/15 E2E.
+- Client move-in SHIPPED (read client source 2026-09-27): initialize
+  handshake, thread/archive+unarchive+unsubscribe+name/set,
+  turn/completed items authority, enriched approvals (tool+path),
+  thread/compacted + error + diff/updated notifications, notifications get
+  no reply. Device proof 15/15 E2E.
 - thread/import SHIPPED (sessions survive the move): bulk-load validated
   history (fail/overwrite/append) from e.g. codex thread/read output;
   imported history reaches providers like native history. Device proof
@@ -205,7 +205,7 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   79/79 imported via thread/import with original UUIDs preserved —
   pinned chat (01a0c661, 425 turns) readable, drawer lists UUID
   threads, pin resolves. Skipped: 0, empty: 0.
-- Environment-parity batch 2026-09-28 (boss: rebuild Codex qualities  in the daemon instead of bending Kara): disconnect hook denies
+- Environment-parity batch 2026-09-28 (boss: rebuild Codex qualities  in the daemon instead of bending the client): disconnect hook denies
   orphaned approvals + fails client-tool waits (turns complete and
   persist instead of hanging); turn/start replies in ~0.03s, execution
   in background task; unsubscribe returns {}; client tools bypass
@@ -258,7 +258,7 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   per-turn model (mid-chat switches work) + forwards approval_policy
   (18/18 adapter tests, 51/51 session tests); her wake-lock call is an
   iagent no-op (was Termux EACCES spam). Both APKs rebuilt+installed.
-- Kara identity+agency RESTORED 2026-09-27 (boss: she called herself
+- Client identity+agency RESTORED 2026-09-27 (boss: it called itself
   Qwen, then DeepSeek, then a tool-less chatbot). Root causes, all on the
   iagent side of the move: (1) daemon had NO base/identity prompt (Codex
   shipped one engine-side) and the adapter dropped her
@@ -272,7 +272,7 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   user message); adapter forwards persona, pins thread model, sends
   max_rounds=8 (17/17 adapter tests); web_search gained a keyless
   DuckDuckGo fallback (no backend configured on device; Tavily-shape
-  config still wins). Live device proof: "who are you" → "I'm Kara";
+  config still wins). Live device proof: "who are you" → answers with its persona;
   bitcoin-price turn → web_search executed → round 2 answered $84k.
   Commits 2e75f02/6c462df/a93039d/1d97bee/b0cb7b5/b7a2504; both APKs
   rebuilt+installed. Follow-up: executed call blocks scrubbed from
@@ -282,32 +282,32 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
   unsend deltas; her activity cards already render tool runs). Daemon
   runs as userland/bin/python3 -m agent -p 4600 (no proot); stale
   generations killed by `-m agent` cmdline match.
-- Kara adapter BUILT in her repo (Desktop/kara, local git): EngineClient
+- Client adapter BUILT in the client repo (local git): EngineClient
   interface, IagentClient translator (URL-switched, both engines alive),
   config repoints to Interlux paths. Her 500 tests pass; 11 new adapter
   tests pass; LIVE test (real socket → device daemon: handshake, thread
   with tool registration, turn, timeline decode, list) passes in 5s.
   Daemon side: policy default_provider/default_model (device set to
   tokenharbor/deepseek-v4.1-flash:free) so keyless turns work.
-- Kara bots MOVED (2026-09-27): forexmind+marketmind staged to guest
+- Client bots MOVED (2026-09-27): forexmind+marketmind staged to guest
   /root/bots (shebangs fixed, deps ccxt/numpy/requests, both byte-compile;
   forex runs a FULL live cycle: fundamentals, 7 pairs scored). marketmind
-  needs her agent to restore analytics/patterns.py (missing upstream file,
+  needs its agent to restore analytics/patterns.py (missing upstream file,
   caller technical.py:216). Supervision: BotSupervisor + BotWatchdog +
-  control actions in Interlux (gradle-verified); her Termux bots alarm
+  control actions in Interlux (gradle-verified); its Termux bots alarm
   retired. Cutover needs both APKs installed (same release key!).
-- Kara move part 2 (in her repo): config/read+batchWrite mapped to
+- Client move part 2 (in the client repo): config/read+batchWrite mapped to
   policy/providers (16 adapter tests green), skills/list mapped, full
-  505-test suite green. Her bots are Python (forexmind/marketmind) —
+  505-test suite green. Its bots are Python (forexmind/marketmind) —
   runtime ready in guest/userland; sources + watchdog repointing stay
-  her-agent moves. Daemon default model fixed (was gpt-4o → gateway 404).
-- command/exec SHIPPED (Kara startup needs it): out-of-band shell, no
+  client-side moves. Daemon default model fixed (was gpt-4o → gateway 404).
+- command/exec SHIPPED (client startup needs it): out-of-band shell, no
   turn/approval/quota, audited with argv redacted past argv[0], 60s cap.
-  Device proof: echo/node/bash-attach shapes green. Kara paths switched
+  Device proof: echo/node/bash-attach shapes green. Client paths switched
   (bash+node under userland; env-file backup skipped on iagent).
-- Kara wire alignment SHIPPED (read her protocol lib): item/tool/call
+- Client wire alignment SHIPPED (read the client protocol lib): item/tool/call
   carries full DynamicToolCallParams (tool+arguments+callId+threadId+
-  turnId); approve() speaks Kara/Codex literals incl. acceptForSession→
+  turnId); approve() speaks compat-client literals incl. acceptForSession→
   session grants and amendment degrade; approval answers routable as
   method-less frames; turn_id in approval requests. Device proof 16/16.
 - Restart surface CODE SHIPPED (Kotlin compile + manifest merge green):
@@ -345,3 +345,26 @@ Plan: docs/STAGE3_USERLAND_PLAN.md. Foundation committed, awaiting build test:
 - gh CLI token is configured; user prefers deepseek models via agentrouter.
 - Local probe sources live in ../binaries/ ; reproducible one is in
   native/seccomp-probe/probe8.c (clang -O2 -o probe8 probe8.c && ./probe8).
+- PARKED 2026-10-01 (boss decision): offline `local` model (llama-server
+  :4602 + qwen2.5-0.5b model present). Today's `pkg install llama-cpp`
+  (0.5.0) broke linking: libllama-server-impl.so needs NDK symbol
+  `__ndk113__hash_memory`, absent from the repo's libc++_shared.so
+  (ran fine on the Sep-25 build). Do NOT remove/replace the local
+  backend: a product depends on it. Revisit on a matching repo pair;
+  options then are rebuild-from-source or waiting out the skew. The
+  `local` provider fails clean (structured error, no hangs) meanwhile.
+- HELD (boss decision): provider keys stay live until his work concludes;
+  rotate afterwards. Keys have appeared in chat history — treat as burned.
+- ITEM 16 (2026-10-01): font+theme packs SHIPPED (Aa button now opens an
+  Appearance dialog: size slider + 3 font packs + 5 theme packs, all in
+  SharedPreferences). Fonts bundled in-APK (JetBrainsMono-Regular,
+  FiraCode-Variable, OFL) + system monospace; themes are full 16-color
+  TerminalTheme consts (Interlux default, Dracula, Solarized Dark, One
+  Dark, White on Black). Device proof: prefs set + force-stop + relaunch
+  → Dracula bg renders; TTFs byte-present in flutter_assets. New files:
+  lib/terminal/terminal_packs.dart, assets/fonts/.
+- NATIVE COMPILE PROVEN 2026-10-01: clang 21 builds+runs hello on-device
+  (`hello-from-device-clang`). Recipe: ndk-sysroot (ships as clang dep)
+  + TMPDIR=$U/tmp + -I$U/include -I$U/include/aarch64-linux-android
+  -L$U/lib -L$U/lib/aarch64-linux-android. Gap: flags are hand-rolled;
+  fold CFLAGS/LDFLAGS/TMPDIR into the login profile so plain `cc` works.

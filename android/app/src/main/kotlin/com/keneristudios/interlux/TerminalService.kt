@@ -50,7 +50,7 @@ class TerminalService : Service() {
         // thread; failures are logged, never fatal.
         Thread {
             com.keneristudios.interlux.agent.AgentDaemon.ensure(this)
-            com.keneristudios.interlux.agent.TabBridge.ensure()
+            com.keneristudios.interlux.agent.TabBridge.ensure(this)
             com.keneristudios.interlux.agent.LlamaServer.ensure(this)
             // Bot watchdog alarm (idempotent arm). Autostart itself stays
             // opt-in via the bots.autostart file — see BotSupervisor.
@@ -58,6 +58,10 @@ class TerminalService : Service() {
             // Resume autostart-listed bots now (reboot/app-restart path);
             // the 15-minute tick covers later deaths.
             com.keneristudios.interlux.agent.BotSupervisor.ensureRestart(this)
+            // Pairing plane: handshake now so the app holds owner creds
+            // before any agent asks. Null result (pairing required) is
+            // fine — the Agents screen will surface it on demand.
+            com.keneristudios.interlux.agent.AgentAuth.rpc(this, "pairing/list")
         }.also { it.isDaemon = true; it.start() }
         return START_STICKY
     }

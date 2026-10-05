@@ -1,10 +1,10 @@
 # Interlux Agent — Full Capability Plan (Codex parity, then beyond)
 
 > Positioning unchanged: Interlux stays a pure terminal; the agent is a
-> capability layer (daemon + versioned protocol) any client (Kara, scripts,
-> future UI) can drive. Boss calls the shots; acceptance is device proof.
+> capability layer (daemon + versioned protocol) any client (reference app,
+> scripts, future UI) can drive. Boss calls the shots; acceptance is device proof.
 
-## 1. What Codex can do (inventory from live Kara/Codex artifacts)
+## 1. What Codex can do (inventory from live compat-client artifacts)
 
 | # | Codex capability | iagent today | Verdict |
 |---|---|---|---|
@@ -59,14 +59,14 @@
 
 ### Epic E — MCP client
 - Daemon spawns stdio MCP servers from config, exposes their tools through
-  the same registry/approval/audit path as native tools. Kara's `kene-mcp`
-  becomes portable instead of Termux-locked.
+  the same registry/approval/audit path as native tools. The client's
+  `kene-mcp` becomes portable instead of Termux-locked.
 
 ### Epic F — Web search + usage accounting
 - `web_search` tool behind a configured endpoint (TokenHarbor-compatible or
   standalone key; never hardcoded). Read-only, no approval by default.
 - Capture `usage` from every provider response into the audit + turn result
-  (cost visibility Kara's dashboard has and we lack).
+  (cost visibility the client's dashboard has and we lack).
 
 ### Epic G — Plan mode + review flow
 - Turn-level `mode: "plan"` (write tools hidden, like sandbox read-only but
@@ -86,7 +86,7 @@
 1. **On-device everything**: loopback daemon + local SLM. No cloud round-trip,
    works offline, private by construction. (Proven: llama-server + Qwen 0.5B.)
 2. **Live tab attach**: operate the user's real shells, not a sandbox copy.
-3. **Approval UX for thumbs**: big Allow/Always/Deny cards (Kara-side UI).
+3. **Approval UX for thumbs**: big Allow/Always/Deny cards (client-side UI).
 4. **Provider freedom**: multi-gateway + free tiers, per-turn switching.
 5. **Audit-everything + consent ledger**: every command, approval, and scan
    target logged; scans need attested targets (already in app).
@@ -112,36 +112,37 @@ Turn params gain `mode` (default `exec`, or `plan`) and `sandbox`
 No auto-open URLs (confirm always), no raw sockets/monitor/HID, no silent
 exfiltration. Deny is always available and always honored.
 
-## 6. Kara-migration surface (daemon-side remainders, from 2026-09-26 assessment)
+## 6. Client-migration surface (daemon-side remainders, from 2026-09-26 assessment)
 
-Kara can drive iagent today for chat/turns/approvals/skills/MCP/tools, but its
-drawer/timeline/config need surface we have not built yet. None of it breaks
-`protocol: 1` (all additive):
+The reference client can drive iagent today for
+chat/turns/approvals/skills/MCP/tools, but its drawer/timeline/config need
+surface we have not built yet. None of it breaks `protocol: 1` (all
+additive):
 
 | # | Need | Status | Home |
 |---|---|---|---|
 | M1 | `thread/list` + `thread/read` (history drawer) | SHIPPED (I.1: newest-first summaries + pure-read tail) | new Epic (I) |
 | M2 | Item-granular event vocabulary (item begin/end, tool args/results) | SHIPPED (I.2: thread/turn/item lifecycle, fs/changed, skills/changed, mcpServer/*) | Epic F + new Epic (I) |
-| M3 | Provider key management RPC (keys live in our private filesDir; Kara cannot write the file) | SHIPPED (I.3: providers get/set/delete, masked, audited keyless) | new Epic (I) |
+| M3 | Provider key management RPC (keys live in our private filesDir; clients cannot write the file directly) | SHIPPED (I.3: providers get/set/delete, masked, audited keyless) | new Epic (I) |
 | M4 | `turn/steer` (mid-turn steering) or explicit wont-do | SHIPPED (I.3: cancel + record + optional carrying turn) | new Epic (I) |
 | M5 | Client-registered tools (`ask_provider` callback) or explicit wont-do | SHIPPED (I.3: tools/register, item/tool/call callback on the Codex wire shape, owner-only unregister) | new Epic (I) |
-| M7 | Kara move-in surface (read from her source 2026-09-27): initialize handshake, thread/archive+unarchive+unsubscribe+name/set, turn/completed items authority, enriched approvals, compacted/error/diff notifications | SHIPPED (Kara-compat battery 15/15 device E2E) | new Epic (I) |
-| M8 | Bulk history import for migration (Kara's codex threads carry over) | SHIPPED (thread/import: validated modes fail/overwrite/append, audited, device-proven with provider-visible history) | new Epic (I) |
+| M7 | Client move-in surface (read from client source 2026-09-27): initialize handshake, thread/archive+unarchive+unsubscribe+name/set, turn/completed items authority, enriched approvals, compacted/error/diff notifications | SHIPPED (compat battery 15/15 device E2E) | new Epic (I) |
+| M8 | Bulk history import for migration (exported client threads carry over) | SHIPPED (thread/import: validated modes fail/overwrite/append, audited, device-proven with provider-visible history) | new Epic (I) |
 | M6 | Inter-app restart surface (auto-start already exists via TerminalService + BootReceiver; needs APK rebuild) | CODE SHIPPED (AgentControl service + signature permission, gradle-verified); device proof pending next install |
 
 Resolved by B–E: `thread/resume|fork|compact`, `memories`, `skills` list,
 MCP client (`mcp_<server>__<tool>`), per-turn providers, sandboxes, audit.
 
-## 8. Client ecosystem (browser, video editor, future Kara abilities)
+## 8. Client ecosystem (browser, video editor, future client abilities)
 
-External apps (browser, video editor, …) drive Kara's future abilities
+External apps (browser, video editor, …) drive the client's future abilities
 (documents, games, bots, background video edits) through two supported
 patterns — no new daemon primitives needed:
 
 1. **MCP server (preferred):** the app spawns or serves stdio/HTTP tools;
    iagent lists, approves, audits, and calls them like native tools.
    Portable, permission-gated, works for any client.
-2. **Client-registered tools:** Kara implements the tool and answers
+2. **Client-registered tools:** The client implements the tool and answers
    `tool/call` callbacks (e.g. WebView bridges like `ask_provider`).
 
 Rules: pass paths/commands, never file bytes (video/docs stay in their
@@ -153,7 +154,7 @@ remainder; split panes stays excluded by standing request)
 
 | Epic | Scope | Notes |
 |---|---|---|
-| I | Kara surface: `thread/list`+`read`, item events, keys RPC, steer, client tools | daemon-side; §6 M1–M5 |
+| I | Client surface: `thread/list`+`read`, item events, keys RPC, steer, client tools | daemon-side; §6 M1–M5 |
 | J | Autonomous multi-step turn loop (model↔tools, bounded) | SHIPPED (max_rounds, fold-per-round, cap 10, rounds in result/audit) |
 | P | Subagents (parallel background turns on child threads) | SHIPPED (spawn/status/result/list/cancel, fork context, per-thread approvals, cap 8) |
 | Q | MCP remote servers (streamable HTTP + header auth) | SHIPPED (JSON/SSE replies, session stickiness, loud failures; OAuth deferred app-side) |

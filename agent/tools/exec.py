@@ -39,8 +39,8 @@ async def exec_tool(
             untrack(key)
         return {
             "status": "success" if proc.returncode == 0 else "error",
-            "stdout": stdout.decode() if stdout else "",
-            "stderr": stderr.decode() if stderr else "",
+            "stdout": stdout.decode("utf-8", errors="replace") if stdout else "",
+            "stderr": stderr.decode("utf-8", errors="replace") if stderr else "",
             "exit_code": proc.returncode,
         }
     except Exception as e:

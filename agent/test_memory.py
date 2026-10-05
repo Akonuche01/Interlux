@@ -4,7 +4,8 @@ Every provider here is single-message, so the message list `build_messages`
 assembles has to be flattened by hand. When that flattening read `messages[-1]`
 instead of the whole list, the daemon faithfully saved every turn to
 `threads/<id>.json`, read it back on the next turn, and then threw it away one
-line later -- so Kara could not answer a question she had asked herself.
+line later -- so the client could not answer a question it had asked
+itself.
 
 These assert on the text that leaves the provider, because that is the only
 place the loss was observable: the history was present in the state file, in the
@@ -24,7 +25,7 @@ class FlattenMessages(unittest.TestCase):
     def test_keeps_history_across_turns(self):
         """The regression: turn 2 must still contain turn 1."""
         msgs = [
-            {"role": "system", "content": "You are Kara."},
+            {"role": "system", "content": "You are the assistant."},
             {"role": "user", "content": "What is 17 * 3?"},
             {"role": "assistant", "content": "17 * 3 = 51."},
             {"role": "user", "content": "What was that again?"},
@@ -33,7 +34,7 @@ class FlattenMessages(unittest.TestCase):
         # Every earlier turn survives...
         self.assertIn("What is 17 * 3?", text)
         self.assertIn("17 * 3 = 51.", text)
-        self.assertIn("You are Kara.", text)
+        self.assertIn("You are the assistant.", text)
         # ...and the live instruction is last, unlabelled, so it still reads as
         # the thing to do now rather than as quoted history.
         self.assertTrue(text.rstrip().endswith("What was that again?"))

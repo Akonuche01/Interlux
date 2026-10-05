@@ -4,11 +4,11 @@ Status: design accepted 2026-09-29. Implements NOT started.
 
 ## Why
 
-Interlux is a neutral multi-agent engine, not Kara's backend. Today any
+Interlux is a neutral multi-agent engine, not one client's backend. Today any
 process on loopback can use the daemon as any agent: no identity, no
 approval, global broadcasts, one shared policy space. The signature-level
-`CONTROL_AGENT` permission further binds Kara to our release key, which
-blocks third-party agents entirely. This plan replaces both with
+`CONTROL_AGENT` permission further binds our client apps to our release key,
+which blocks third-party agents entirely. This plan replaces both with
 user-approved pairing plus per-agent tokens.
 
 Non-goals for this step: per-agent namespacing of threads/tools/policy
@@ -21,7 +21,7 @@ Non-goals for this step: per-agent namespacing of threads/tools/policy
 3. Approval is revocable at any time, from Interlux UI.
 4. No shared release keys. Third parties never need our signing key.
 5. Secrets: hashes on disk, raw secret shown once, never in logs/audit.
-6. Existing Kara installs migrate with a single approve tap.
+6. Existing client installs migrate with a single approve tap.
 
 ## Pairing flow
 
@@ -58,8 +58,8 @@ it stays privileged; usage must be open or third parties can never run.
 
 ## Migration
 
-- Current Kara (no token): first `initialize` after upgrade returns
-  `pairing_required`; user taps approve once in Interlux; her stored
+- Current clients (no token): first `initialize` after upgrade returns
+  `pairing_required`; user taps approve once in Interlux; the stored
   token is used from then on. No re-install, no key sharing.
 - Daemon with no `agents.json`: behaves as today for... nothing. There
   is no legacy bypass: unknown connections get `pairing_required`.

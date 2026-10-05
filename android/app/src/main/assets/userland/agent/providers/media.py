@@ -10,9 +10,33 @@ import mimetypes
 import os
 from pathlib import Path
 
+from ..home import engine_home
+
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 _ALLOWED = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
+# File reads stay inside user-controlled trees: the daemon uid can read
+# its own secrets (provider keys), so an unconstrained path here is a
+# key-exfiltration primitive into any vendor-bound turn. Attachments
+# arrive staged under home (uploads) or shared storage; nothing
+# legitimate lives elsewhere. data: URLs bypass this (no file read).
+def _read_allowed(p: Path) -> bool:
+    try:
+        rp = p.resolve()
+    except Exception:
+        return False
+    try:
+        home = engine_home().resolve()
+        if rp == home or home in rp.parents:
+            return True
+    except Exception:
+        pass
+    for root in ("/storage/emulated/0", "/sdcard"):
+        rr = Path(root)
+        if rp == rr or rr in rp.parents:
+            return True
+    return False
 
 
 def load_image(ref: str) -> tuple[str, str]:
@@ -27,6 +51,8 @@ def load_image(ref: str) -> tuple[str, str]:
         _check_size(raw)
         return mime, payload
     p = Path(os.path.expandvars(os.path.expanduser(ref)))
+    if not _read_allowed(p):
+        raise ValueError(f"image outside readable trees: {ref}")
     if not p.is_file():
         raise ValueError(f"image not found: {ref}")
     if p.suffix.lower() not in _ALLOWED:
@@ -59,7 +85,7 @@ def flatten_messages(messages: list[dict] | None) -> str:
     `threads/<id>.json` and read it back on the next turn, so the history was
     on disk, in the RPC payload, in the audit trail — and then thrown away one
     line later. The model began every turn having never seen any prior turn.
-    That is why Kara could not answer a question she had asked herself
+    That is why the client could not answer a question it had asked
     moments earlier: within a turn the loop's own `fold` carried context
     (so tool use worked), but across turns there was nothing.
 

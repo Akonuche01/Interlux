@@ -28,14 +28,13 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from .home import engine_config_dir
 from .tools.plugins import scan_plugins
 
 logger = logging.getLogger("skills")
 
 BUNDLED_DIR = Path(__file__).parent / "skills"
-USER_DIR = Path(
-    __import__("os").environ.get("INTERLUX_AGENT_CONFIG", "~/.interlux/agent")
-).expanduser() / "skills"
+USER_DIR = engine_config_dir() / "skills"
 
 _KEYS = ("name", "description", "tools", "tools_dir", "plugin")
 
@@ -116,9 +115,18 @@ def get_skill(name: str) -> dict | None:
     return _ensure().get(str(name or ""))
 
 
-def catalog_message() -> str:
-    """Compact per-turn system message listing every skill."""
+def catalog_message(allow: set[str] | None = None) -> str:
+    """Compact per-turn system message listing the available skills.
+
+    `allow` narrows the catalogue to a named subset. **None means no
+    filtering** — every caller that has not asked to be narrowed keeps the
+    full list, which is what keeps this from changing behaviour for any
+    client already on the device. An empty set is *not* the same thing as
+    None: it genuinely means "this agent has no skills", and yields "".
+    """
     skills = list_skills()
+    if allow is not None:
+        skills = [s for s in skills if s["name"] in allow]
     if not skills:
         return ""
     lines = [
@@ -165,10 +173,14 @@ def messages_for(names) -> list[dict]:
     return msgs
 
 
-def skill_messages(param) -> list[dict]:
-    """Per-turn skill injection: catalog first, then requested bodies."""
+def skill_messages(param, allow: set[str] | None = None) -> list[dict]:
+    """Per-turn skill injection: catalog first, then requested bodies.
+
+    `allow` narrows the catalogue to a named subset; None (the default)
+    means no filtering. See catalog_message().
+    """
     msgs: list[dict] = []
-    catalog = catalog_message()
+    catalog = catalog_message(allow=allow)
     if catalog:
         msgs.append({"role": "system", "content": catalog})
     msgs.extend(messages_for(param))

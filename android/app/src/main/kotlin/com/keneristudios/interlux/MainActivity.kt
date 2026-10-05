@@ -55,6 +55,7 @@ class MainActivity : FlutterActivity() {
             },
         )
         storageGate = StorageGate(flutterEngine.dartExecutor.binaryMessenger, this)
+        AgentsGate(flutterEngine.dartExecutor.binaryMessenger, applicationContext)
         Pty(flutterEngine.dartExecutor.binaryMessenger, applicationContext)
     }
 

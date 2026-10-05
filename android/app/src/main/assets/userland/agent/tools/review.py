@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import json
 
-from ..pconfig import make_provider
+from ..pconfig import configured_provider_names, load_provider, resolve_provider
+from ..policy import agent_ctx, load_policy
 from .git import git_diff
 
 MAX_DIFF_CHARS = 20000
@@ -41,11 +42,16 @@ async def _git_stat(cwd: str) -> str:
 
 async def review(
     cwd: str = ".",
-    provider: str = "tokenharbor",
+    provider: str = "",
     model: str = "",
     max_diff_chars: int = MAX_DIFF_CHARS,
 ) -> dict:
-    """Critique the unstaged diff of a repo. Read-only."""
+    """Critique the unstaged diff of a repo. Read-only.
+
+    The provider is never named in code. It is the one the caller chose, or
+    the configured default, or simply the only provider configured -- a vendor
+    hardcoded here would be a vendor the user may hold no key for.
+    """
     diff = await git_diff(cwd)
     if diff.get("status") != "success":
         return {
@@ -71,7 +77,22 @@ async def review(
     if truncated:
         text = text[:limit]
 
-    prov = make_provider(provider)
+    if not provider:
+        # Never name a vendor here -- see the docstring. This used to default
+        # to "tokenharbor", so EVERY call failed with "provider not available"
+        # on any install that held no Token Harbor key, even when another
+        # provider was configured and working.
+        provider = str(load_policy().get("default_provider") or "")
+        if not provider:
+            names = configured_provider_names()
+            provider = names[0] if names else ""
+        if not provider:
+            return {"status": "error", "message": "no provider is configured"}
+
+    # Per-agent credentials (step 3): the calling agent's key, same as
+    # turns get. Setup phase (no agent) resolves the legacy globals.
+    prov = load_provider(
+        provider, resolve_provider(provider, agent_ctx.get("")))
     if prov is None:
         return {
             "status": "error",

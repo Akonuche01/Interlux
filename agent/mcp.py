@@ -30,13 +30,12 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from .home import engine_config_dir
 from .transport import broadcast
 
 logger = logging.getLogger("mcp")
 
-CONFIG_DIR = Path(
-    os.environ.get("INTERLUX_AGENT_CONFIG", "~/.interlux/agent")
-).expanduser()
+CONFIG_DIR = engine_config_dir()
 CONFIG_FILE = CONFIG_DIR / "mcp.json"
 
 PROTOCOL_VERSION = "2025-06-18"

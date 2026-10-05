@@ -5,6 +5,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Least privilege. With no permissions block the job inherits the repository
+# default GITHUB_TOKEN scope, which is often read/write on contents. This
+# workflow only checks out the source and uploads an artifact, so read-only
+# contents is all it needs.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest

@@ -20,6 +20,15 @@ class ResponsesUnsupported(Exception):
     pass
 
 
+def _put(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue,
+         item) -> None:
+    """Threadsafe queue put that survives loop shutdown (RuntimeError)."""
+    try:
+        loop.call_soon_threadsafe(queue.put_nowait, item)
+    except RuntimeError:
+        pass
+
+
 def _input_block(text: str, images: list[str]) -> list[dict] | str:
     if not images:
         return text
@@ -143,40 +152,31 @@ async def post_responses(
                         if obj.get("type") == "response.completed":
                             used = _usage_from(obj)
                             if used:
-                                loop.call_soon_threadsafe(
-                                    queue.put_nowait,
-                                    {"type": "usage", "usage": used},
-                                )
+                                _put(loop, queue,
+                                     {"type": "usage", "usage": used})
                             break
                         for chunk in _chunks_from(obj):
-                            loop.call_soon_threadsafe(queue.put_nowait, chunk)
+                            _put(loop, queue, chunk)
                         for r in _reasoning_from(obj):
-                            loop.call_soon_threadsafe(
-                                queue.put_nowait,
-                                {"type": "reasoning_delta", "content": r})
+                            _put(loop, queue,
+                                 {"type": "reasoning_delta", "content": r})
                 else:
                     body = r.read().decode("utf-8")
                     full = _output_text(body)
                     if full:
-                        loop.call_soon_threadsafe(queue.put_nowait, full)
+                        _put(loop, queue, full)
                     used = _usage_from_body(body)
                     if used:
-                        loop.call_soon_threadsafe(
-                            queue.put_nowait, {"type": "usage", "usage": used}
-                        )
+                        _put(loop, queue, {"type": "usage", "usage": used})
         except urllib.error.HTTPError as e:
             if e.code in (404, 405, 501):
-                loop.call_soon_threadsafe(queue.put_nowait, unsupported)
+                _put(loop, queue, unsupported)
             else:
-                loop.call_soon_threadsafe(
-                    queue.put_nowait, {"type": "error", "message": str(e)}
-                )
+                _put(loop, queue, {"type": "error", "message": str(e)})
         except Exception as e:
-            loop.call_soon_threadsafe(
-                queue.put_nowait, {"type": "error", "message": str(e)}
-            )
+            _put(loop, queue, {"type": "error", "message": str(e)})
         finally:
-            loop.call_soon_threadsafe(queue.put_nowait, done)
+            _put(loop, queue, done)
 
     threading.Thread(target=work, daemon=True).start()
     while True:

@@ -29,7 +29,7 @@ private by construction. Provider credentials stay shared for now
   `-32602 unknown thread` the engine already uses (indistinguishable
   from missing — no oracle for enumerating others' ids).
 - Migration: on upgrade, all unstamped legacy threads are stamped to
-  the first paired agent (in practice Kara). No history goes dark,
+  the first paired agent (in practice the first client). No history goes dark,
   pins and indexes keep working, and there is no ambiguous
   claim-on-touch race.
 

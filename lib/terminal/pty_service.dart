@@ -17,8 +17,6 @@ import 'package:flutter/services.dart';
 class PtyService {
   static const _method = MethodChannel('interlux/pty');
 
-  EventChannel? _events;
-
   final _output = StreamController<String>.broadcast();
   final _exited = StreamController<void>.broadcast();
 
@@ -34,6 +32,13 @@ class PtyService {
   bool _running = false;
   bool get isRunning => _running;
 
+  /// Set once dispose() has run. start() re-checks it after its await:
+  /// dispose() used to run while the native 'start' call was still in flight,
+  /// find _sessionId still null, and stop nothing -- then start() resumed and
+  /// marked a disposed service as running, leaking a native pty that ran for
+  /// the life of the process with no owner, no UI and no way to close it.
+  bool _disposed = false;
+
   StreamSubscription? _subscription;
 
   Future<void> start() async {
@@ -45,13 +50,26 @@ class PtyService {
         message: 'native session id missing',
       );
     }
+    if (_disposed) {
+      // dispose() ran while the call above was in flight and could not stop
+      // anything, because the id did not exist yet. Take the session back
+      // down rather than reviving a disposed service.
+      try {
+        await _method.invokeMethod('stop', {'id': id});
+      } on PlatformException {
+        // The pty may already be gone; that is fine.
+      }
+      return;
+    }
     _sessionId = id;
     _running = true;
 
     final events = EventChannel('interlux/pty/events/$id');
-    _events = events;
     _subscription = events.receiveBroadcastStream().listen(
       (data) {
+        // A late event arriving after dispose() must not touch a closed
+        // controller (see dispose).
+        if (_disposed) return;
         if (data is Uint8List) {
           _handleBytes(data);
         } else if (data is String) {
@@ -59,10 +77,12 @@ class PtyService {
         }
       },
       onError: (error) {
+        if (_disposed) return;
         _running = false;
         _exited.add(null);
       },
       onDone: () {
+        if (_disposed) return;
         _running = false;
         _exited.add(null);
       },
@@ -111,7 +131,6 @@ class PtyService {
     _running = false;
     await _subscription?.cancel();
     _subscription = null;
-    _events = null;
     final id = _sessionId;
     _sessionId = null;
     if (id == null) return;
@@ -123,8 +142,15 @@ class PtyService {
   }
 
   void dispose() {
-    stop();
-    _output.close();
-    _exited.close();
+    _disposed = true;
+    // Close the controllers only once stop() has actually torn the
+    // subscription down. Closing them first meant an event landing between
+    // the two called add() on a closed controller -- "Bad state: Cannot add
+    // new events after calling close", thrown from a stream callback as an
+    // unhandled zone error rather than anything the caller could catch.
+    stop().whenComplete(() {
+      _output.close();
+      _exited.close();
+    });
   }
 }

@@ -9,11 +9,12 @@ import android.os.SystemClock
 import com.keneristudios.interlux.BootTracer
 
 /**
- * Watchdog tick for the trading bots (Kara move): re-ensure autostart-listed
- * bots every 15 minutes. Same proven pattern as Kara's EngineWatchdog — the
- * alarms live in OUR process so they survive the bots' tree dying — but the
- * tick runs fully in-process (receiver + goAsync, no service start, no
- * notification): it only checks pids and spawns what is missing.
+ * Watchdog tick for the trading bots (client move-in): re-ensure
+ * autostart-listed bots every 15 minutes. Same proven pattern as the old
+ * EngineWatchdog — the alarms live in OUR process so they survive the
+ * bots' tree dying — but the tick runs fully in-process (receiver +
+ * goAsync, no service start, no notification): it only checks pids and
+ * spawns what is missing.
  *
  * Alarms do not survive reboot; they are re-armed from TerminalService start
  * (which BootReceiver drives). Arming is idempotent.

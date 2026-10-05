@@ -28,18 +28,45 @@ object AgentDaemon {
     /**
      * Idempotent: returns once port 4600 answers. Spawns the daemon only if
      * nothing is listening. Safe to call from any thread.
+     *
+     * Freshness: a responder on the port is NOT enough. After an app
+     * update the extracted userland is new while a reparented old daemon
+     * may still hold the port -- keeping it would serve stale code
+     * indefinitely, and that is exactly how old daemons outlived their
+     * APKs. When the version marker changed under us, the old process
+     * is killed and a fresh one spawned even though the port answers.
      */
     fun ensure(context: Context) {
+        val appContext = context.applicationContext
+        val marker = File(File(appContext.filesDir, "userland"), ".version")
+        fun readMarker(): String = try {
+            if (marker.exists()) marker.readText().trim() else ""
+        } catch (_: Exception) {
+            ""
+        }
         if (isUp()) {
-            BootTracer.step("agent: already up on :$PORT")
-            return
+            // A responder alone is NOT enough: after an app update the
+            // extracted userland is new while a reparented old daemon may
+            // still hold the port -- keeping it would serve stale code
+            // indefinitely, and that is exactly how old daemons outlived
+            // their APKs. Userland.ensure is idempotent, so running it
+            // here only detects the refresh, cheaply.
+            val before = readMarker()
+            com.keneristudios.interlux.userland.Userland.ensure(appContext)
+            if (readMarker() == before) {
+                BootTracer.step("agent: already up on :$PORT")
+                return
+            }
+            BootTracer.stepPublic(
+                "agent: userland refreshed ($before -> " +
+                    "${readMarker()}), restarting daemon for fresh code")
+            killStale(appContext)
         }
         synchronized(this) {
-            if (isUp() || starting) return
+            if (starting) return
             starting = true
         }
         try {
-            val appContext = context.applicationContext
             val userland =
                 com.keneristudios.interlux.userland.Userland.ensure(appContext)
             if (isUp()) {

@@ -23,7 +23,7 @@ export OPENAI_API_KEY=sk-...
 python3 -m agent -p 4600
 
 # Terminal 2: Test client
-python3 -m agent.test_kara
+python3 -m agent.test_compat
 ```
 
 ## Protocol
@@ -254,18 +254,18 @@ Notifications:
   threads error; steering a live history-less thread works.
 - Client tools: `tools/register` offers a tool the daemon calls back out
   to over your socket (`{"method": "item/tool/call", "params": {"tool",
-  "arguments", "callId", "threadId", "turnId}}` — the Codex wire shape, so
-  Kara's dispatcher fires unchanged — → reply `{"id", "result"}` with a
+  "arguments", "callId", "threadId", "turnId}}` — the compat-client wire
+  shape, so existing dispatchers fire unchanged — → reply `{"id", "result"}` with a
   `DynamicToolCallResponse` (`{contentItems, success}`) or any dict).
   Ask-first approval, audited, 30s timeout; dead owners fail loudly and
   auto-unregister; `tools/unregister` is owner-only; `tools` lists the
   registry split by origin (all / client+specs / mcp). Registration
   accepts an optional `inputSchema` passthrough.
 - `approve` understands plain words (`allow`, `deny`, …), our
-  `{decision, scope}` params, and Kara/Codex literals (`accept` once,
+  `{decision, scope}` params, and compat-client literals (`accept` once,
   `acceptForSession` always, `decline`; amendment objects degrade to a
   logged one-shot allow). Approval answers may also arrive as method-less
-  `{id, result}` frames (her client answers that way); unknown strings
+  `{id, result}` frames (compat clients answer that way); unknown strings
   deny (fail closed).
 
 ## Subagents (Epic P)

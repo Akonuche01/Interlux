@@ -3,17 +3,15 @@
 import asyncio
 import os
 import shutil
-import subprocess
 
+from ..home import engine_home
 from .track import track, untrack
-
-INTERLUX_HOME = "/data/user/0/com.keneristudios.interlux/files/userland/home"
 
 
 def _resolve_cwd(cwd: str | None) -> str:
     if cwd:
         return cwd
-    return os.environ.get("HOME") or INTERLUX_HOME
+    return str(engine_home())
 
 
 def _resolve_shell() -> str:
@@ -29,8 +27,14 @@ def _resolve_shell() -> str:
     return "/system/bin/sh"
 
 
-async def run_shell(command: str, cwd: str | None = None) -> dict:
-    """Run shell command and return output."""
+async def run_shell(command: str, cwd: str | None = None,
+                  timeout: float = 60) -> dict:
+    """Run shell command and return output.
+
+    Bounded like exec_tool: a hung command (sleep, interactive pager,
+    network wait) must fail the call, not the turn. Without this one
+    hanging shell held its turn open until the 6h backstop.
+    """
     try:
         proc = await asyncio.create_subprocess_shell(
             command,
@@ -41,14 +45,23 @@ async def run_shell(command: str, cwd: str | None = None) -> dict:
         )
         key = track(proc)
         try:
-            stdout, stderr = await proc.communicate()
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                return {"status": "error",
+                        "message": f"timed out after {timeout}s"}
         finally:
             untrack(key)
 
         return {
             "status": "success" if proc.returncode == 0 else "error",
-            "stdout": stdout.decode() if stdout else "",
-            "stderr": stderr.decode() if stderr else "",
+            "stdout": stdout.decode("utf-8", errors="replace") if stdout else "",
+            "stderr": stderr.decode("utf-8", errors="replace") if stderr else "",
             "exit_code": proc.returncode,
         }
     except Exception as e:

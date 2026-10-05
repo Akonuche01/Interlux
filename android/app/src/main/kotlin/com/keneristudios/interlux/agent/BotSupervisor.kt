@@ -5,8 +5,8 @@ import com.keneristudios.interlux.BootTracer
 import java.io.File
 
 /**
- * Owns the trading bots' runtime (Kara move): long-lived guest processes
- * supervised independently of any UI, phone-call-safe.
+ * Owns the trading bots' runtime (client move-in): long-lived guest
+ * processes supervised independently of any UI, phone-call-safe.
  *
  * Why here and not in the bots' own shell loops: measured 2026-09-25, both
  * bot trees (supervisors included) died in one action, so only a process
@@ -53,14 +53,19 @@ object BotSupervisor {
 
     fun autostartNames(context: Context): List<String> {
         return try {
-            // Prefer the legacy agent-level file when it exists (that is
-            // where the first migration wrote it); otherwise the bots dir.
-            val file = legacyAutostartFile(context).takeIf { it.exists() }
-                ?: autostartFile(context)
-            file.takeIf { it.exists() }
-                ?.readLines()?.map { it.trim() }
-                ?.filter { it.isNotEmpty() && !it.startsWith("#") }
-                ?: emptyList()
+            // Union of both locations: the first migration wrote the
+            // agent-level file, the control surface writes the bots-dir
+            // file. Preferring one silently drops the other's entries
+            // (a control-surface edit looked applied while the legacy
+            // file kept winning), so read both.
+            val files = listOf(
+                legacyAutostartFile(context),
+                autostartFile(context),
+            ).filter { it.exists() }
+            files.flatMap { file ->
+                file.readLines().map { it.trim() }
+                    .filter { it.isNotEmpty() && !it.startsWith("#") }
+            }.distinct()
         } catch (_: Exception) {
             emptyList()
         }
@@ -71,6 +76,13 @@ object BotSupervisor {
             val known = BOTS.map { it.name }.toSet()
             val clean = names.map { it.trim() }.filter { it in known }
             autostartFile(context).writeText(clean.joinToString("\n"))
+            // One-time migration off the legacy path: now that the
+            // canonical file carries the merged set, the legacy file
+            // only shadows it.
+            try {
+                legacyAutostartFile(context).delete()
+            } catch (_: Exception) {
+            }
             BootTracer.step("bots: autostart=[${clean.joinToString(",")}]")
         } catch (e: Exception) {
             BootTracer.step("bots: autostart write FAILED ${e.message}")
@@ -185,6 +197,9 @@ object BotSupervisor {
                 env["PATH"] =
                     "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
                 pb.directory(File(userland, "home"))
+                // Rotated, not appended forever: these logs grow a line
+                // per bot cycle, all day, on a storage-constrained phone.
+                rotateLog(File(dir(appContext), "${bot.name}.log"))
                 pb.redirectOutput(
                     ProcessBuilder.Redirect.appendTo(
                         File(dir(appContext), "${bot.name}.log"),
@@ -195,6 +210,7 @@ object BotSupervisor {
                 val pid = pidOf(proc)
                 if (pid != null) {
                     pidFile(appContext, bot.name).writeText(pid.toString())
+                    deadStreak.remove(bot.name)
                     BootTracer.step("bots: started ${bot.name} pid=$pid")
                     out[bot.name] = mapOf("started" to true, "pid" to pid)
                 } else {
@@ -217,8 +233,13 @@ object BotSupervisor {
         val appContext = context.applicationContext
         val targets = if (name.isNullOrBlank()) {
             BOTS.map { it.name }
-        } else {
+        } else if (BOTS.any { it.name == name }) {
+            // Validated against known bots: the name becomes a pid
+            // filename below, and an unvalidated one is a path
+            // traversal into arbitrary "<name>.pid" files.
             listOf(name)
+        } else {
+            return mapOf("error" to "unknown bot: $name")
         }
         val out = mutableMapOf<String, Any?>()
         for (b in targets) {
@@ -249,20 +270,49 @@ object BotSupervisor {
     /**
      * Restart autostart-listed bots that are not running. Called from the
      * watchdog tick and (opt-in) at boot. Never touches unlisted bots.
+     *
+     * Crash-loop guard: a bot found dead on three straight ticks is left
+     * down with a loud log line instead of being respawned forever. A
+     * manual start resets the count. Without this a bot that dies on
+     * launch burns a spawn (and log spam) every 15 minutes indefinitely.
      */
+    private val deadStreak = mutableMapOf<String, Int>()
+
     fun ensureRestart(context: Context) {
         val appContext = context.applicationContext
         val names = autostartNames(appContext)
         BootTracer.step("bots: ensureRestart autostart=[${names.joinToString(",")}]")
         for (name in names) {
             try {
-                if (!isRunning(appContext, name)) {
-                    BootTracer.step("bots: watchdog restarting $name")
-                    start(appContext, name)
+                if (isRunning(appContext, name)) {
+                    deadStreak.remove(name)
+                    continue
                 }
+                val streak = (deadStreak[name] ?: 0) + 1
+                deadStreak[name] = streak
+                if (streak > 3) {
+                    BootTracer.step(
+                        "bots: $name dead $streak ticks running, " +
+                            "leaving down (manual start to retry)")
+                    continue
+                }
+                BootTracer.step("bots: watchdog restarting $name")
+                start(appContext, name)
             } catch (e: Exception) {
                 BootTracer.step("bots: watchdog $name FAILED ${e.message}")
             }
+        }
+    }
+
+    /** One spare log generation: bots append lines all day, every day. */
+    private fun rotateLog(log: File) {
+        try {
+            if (log.exists() && log.length() > 5 * 1024 * 1024) {
+                val spare = File(log.parent, "${log.name}.1")
+                if (spare.exists()) spare.delete()
+                log.renameTo(spare)
+            }
+        } catch (_: Exception) {
         }
     }
 

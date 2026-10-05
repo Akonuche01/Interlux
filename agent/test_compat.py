@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Kara-compatible client test."""
+"""Compat-client protocol test."""
 
 import asyncio
 import json

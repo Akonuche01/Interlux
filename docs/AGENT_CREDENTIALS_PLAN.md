@@ -58,9 +58,9 @@ resolver; the rest of each section stays global admin config.
 ## Migration
 
 Existing global `api_key` values move wholesale into the first paired
-agent's section (same rule as threads: Kara, in practice). Base URLs
-and model lists stay global. The migration logs what moved (names
-only, never values). After migration no `api_key` remains at top
+agent's section (same rule as threads: the first client, in practice).
+Base URLs and model lists stay global. The migration logs what moved
+(names only, never values). After migration no `api_key` remains at top
 level; a startup check warns loudly if one ever reappears there.
 
 ## Out of scope (explicit)

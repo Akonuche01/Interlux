@@ -1,7 +1,7 @@
 name: interlux
 description: "A modern terminal for Android."
 publish_to: 'none'
-version: 0.8.0+17
+version: 0.8.0+18
 
 environment:
   sdk: ^3.13.0
@@ -25,3 +25,10 @@ flutter:
     - agent/providers/
     - agent/tools/
     - agent/plugins/
+  fonts:
+    - family: JetBrainsMono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono-Regular.ttf
+    - family: FiraCode
+      fonts:
+        - asset: assets/fonts/FiraCode-Variable.ttf

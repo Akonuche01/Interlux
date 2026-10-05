@@ -15,11 +15,11 @@ import com.keneristudios.interlux.BootTracer
 import com.keneristudios.interlux.TerminalService
 
 /**
- * Inter-app control surface for the agent daemon (Kara move-in, M6).
+ * Inter-app control surface for the agent daemon (client move-in, M6).
  *
  * Exported, guarded by the signature-level
  * `com.keneristudios.interlux.permission.CONTROL_AGENT` permission: only
- * apps signed with OUR key (Kara, built by us) can call it. Actions:
+ * apps signed with OUR key (our own client apps) can call it. Actions:
  * START_AGENT (make sure everything is up), STOP_AGENT (daemon down until
  * the next service start), RESTART_AGENT (fresh daemon, picks up changed
  * agent files without an app restart), AGENT_STATUS (is it answering?).
@@ -66,8 +66,9 @@ class AgentControl : Service() {
                         reply(replyTo, ok = true, running = up)
                     }
                     ACTION_START_BOTS -> {
-                        // Kara move: her watchdog used to poke Termux; ours
-                        // supervises the relocated trees directly.
+                        // Compat note: the old watchdog poked at an
+                        // external runtime; ours supervises the relocated
+                        // trees directly.
                         val bot = intent?.getStringExtra(EXTRA_BOT)
                         val res = BotSupervisor.start(this, bot)
                         val autostart = intent?.getBooleanExtra(
@@ -107,6 +108,39 @@ class AgentControl : Service() {
                         replyMap(replyTo, ok = true, running = null,
                             extra = mapOf("autostart" to names))
                     }
+                    ACTION_PAIRING_LIST -> {
+                        pairCall(replyTo, "pairing/list", emptyMap())
+                    }
+                    ACTION_PAIRING_APPROVE -> {
+                        val id = intent?.getStringExtra(EXTRA_PAIRING_ID)
+                        if (id.isNullOrEmpty()) {
+                            replyMap(replyTo, ok = false, running = null,
+                                extra = mapOf("error" to "missing id"))
+                        } else {
+                            pairCall(replyTo, "pairing/approve",
+                                mapOf("id" to id))
+                        }
+                    }
+                    ACTION_PAIRING_DENY -> {
+                        val id = intent?.getStringExtra(EXTRA_PAIRING_ID)
+                        if (id.isNullOrEmpty()) {
+                            replyMap(replyTo, ok = false, running = null,
+                                extra = mapOf("error" to "missing id"))
+                        } else {
+                            pairCall(replyTo, "pairing/deny",
+                                mapOf("id" to id))
+                        }
+                    }
+                    ACTION_PAIRING_REVOKE -> {
+                        val agent = intent?.getStringExtra(EXTRA_AGENT_ID)
+                        if (agent.isNullOrEmpty()) {
+                            replyMap(replyTo, ok = false, running = null,
+                                extra = mapOf("error" to "missing agent_id"))
+                        } else {
+                            pairCall(replyTo, "pairing/revoke",
+                                mapOf("agent_id" to agent))
+                        }
+                    }
                     else -> {
                         reply(replyTo, ok = false, running = false,
                             error = "unknown action: $action")
@@ -125,6 +159,32 @@ class AgentControl : Service() {
             }
         }.also { it.isDaemon = true; it.start() }
         return START_NOT_STICKY
+    }
+
+    /** Pairing-plane call through our owner credential. Null payload +
+     * ok=false means pairing is required first (another owner holds the
+     * store) — the caller surfaces the Agents path, not an error log.
+     * Wire failures arrive as ok=false with the daemon/RPC message. */
+    private fun pairCall(to: PendingIntent?, method: String,
+                         params: Map<String, Any?>) {
+        try {
+            val res = AgentAuth.rpc(this, method, params)
+            if (res == null) {
+                replyMap(to, ok = false, running = null,
+                    extra = mapOf("error" to "pairing required"))
+                return
+            }
+            @Suppress("UNCHECKED_CAST")
+            val map = (res.keys().asSequence().toList())
+                .associateWith { k -> res.opt(k) as Any? }
+            replyMap(to, ok = true, running = null, extra = map)
+        } catch (e: AgentWs.RpcError) {
+            replyMap(to, ok = false, running = null,
+                extra = mapOf("error" to (e.message ?: "rpc failed")))
+        } catch (e: Exception) {
+            replyMap(to, ok = false, running = null,
+                extra = mapOf("error" to (e.message ?: "failed")))
+        }
     }
 
     private fun reply(to: PendingIntent?, ok: Boolean, running: Boolean,
@@ -233,12 +293,24 @@ class AgentControl : Service() {
             "com.keneristudios.interlux.action.BOTS_STATUS"
         const val ACTION_BOTS_AUTOSTART =
             "com.keneristudios.interlux.action.BOTS_AUTOSTART"
+        const val ACTION_PAIRING_LIST =
+            "com.keneristudios.interlux.action.PAIRING_LIST"
+        const val ACTION_PAIRING_APPROVE =
+            "com.keneristudios.interlux.action.PAIRING_APPROVE"
+        const val ACTION_PAIRING_DENY =
+            "com.keneristudios.interlux.action.PAIRING_DENY"
+        const val ACTION_PAIRING_REVOKE =
+            "com.keneristudios.interlux.action.PAIRING_REVOKE"
         const val EXTRA_BOT =
             "com.keneristudios.interlux.extra.BOT"
         const val EXTRA_BOTS =
             "com.keneristudios.interlux.extra.BOTS"
         const val EXTRA_AUTOSTART =
             "com.keneristudios.interlux.extra.AUTOSTART"
+        const val EXTRA_PAIRING_ID =
+            "com.keneristudios.interlux.extra.PAIRING_ID"
+        const val EXTRA_AGENT_ID =
+            "com.keneristudios.interlux.extra.AGENT_ID"
         const val EXTRA_RESULT =
             "com.keneristudios.interlux.extra.RESULT"
         const val RESULT_OK_KEY = "ok"
@@ -247,7 +319,7 @@ class AgentControl : Service() {
         const val RESULT_ERROR_KEY = "error"
         const val RESULT_PAYLOAD_KEY = "payload"
 
-        /** Explicit intent Kara (or adb) sends to drive the daemon. */
+        /** Explicit intent a paired client (or adb) sends to drive the daemon. */
         fun intent(context: Context, action: String): Intent {
             return Intent(action).apply {
                 setClassName(context.packageName,

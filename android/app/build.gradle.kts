@@ -66,3 +66,33 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+// ---------------------------------------------------------------------------
+// The APK's engine copy is GENERATED, never hand-maintained.
+//
+// `src/main/assets/userland/agent/` used to be a hand-made copy of `agent/`,
+// pruned by hand. It rotted: by 2026-10-02 it was missing two modules the
+// engine imports (`calls/`, `home.py`) and it carried stale `*.bak` files and
+// `__pycache__` directories. Nobody could tell which copy was authoritative,
+// and a fix applied to one copy silently reverted on the next build.
+//
+// `agent/` is now the single source of truth -- folder and repo, nothing else.
+// This task regenerates the asset from it on every build. `Sync` rather than
+// `Copy` on purpose: it DELETES anything in the destination that is not in the
+// source, which is what clears the accumulated backups and bytecode caches.
+// ---------------------------------------------------------------------------
+val syncUserlandAgent by tasks.registering(Sync::class) {
+    from(file("../../agent")) {
+        // Present in the source tree, never in the shipped APK.
+        exclude("test_*.py")
+        exclude("*.bak*")
+        exclude("__pycache__/**")
+        exclude("**/__pycache__/**")
+        exclude("*.pyc")
+    }
+    into(layout.projectDirectory.dir("src/main/assets/userland/agent"))
+}
+
+// Any asset merge must run after the copy has been regenerated.
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
+    .configureEach { dependsOn(syncUserlandAgent) }

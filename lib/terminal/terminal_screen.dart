@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xterm/xterm.dart';
 
 import 'terminal_links.dart';
+import 'terminal_packs.dart';
 import 'terminal_search.dart';
 import 'terminal_session.dart';
 import '../pentest/report.dart';
@@ -13,6 +14,7 @@ import '../pentest/targets_store.dart';
 import '../power/battery_opt.dart';
 import '../device/device_api.dart';
 import '../storage/setup_storage.dart';
+import '../agents/agents_screen.dart';
 
 /// A full-screen interactive terminal backed by a real shell.
 ///
@@ -37,6 +39,20 @@ class _TerminalScreenState extends State<TerminalScreen> {
   int _activeIndex = 0;
   final TargetsStore _targetsStore = TargetsStore();
 
+  /// Per-session listener closures.
+  ///
+  /// A shared tear-off cannot report WHICH session notified (ChangeNotifier
+  /// hands the listener no sender), so every notification used to be read
+  /// against the ACTIVE tab: a background tab whose shell died fired the
+  /// listener, which inspected tab 1, found nothing wrong and swallowed the
+  /// failure -- and no second notification ever arrived, so the user switched
+  /// to a dead tab and found a frozen prompt with no explanation. A stale
+  /// error flag could also be cleared off the WRONG session.
+  ///
+  /// ChangeNotifier.removeListener needs the same function object that was
+  /// added, so each closure is kept here rather than rebuilt at removal.
+  final Map<TerminalSession, VoidCallback> _sessionListeners = {};
+
   /// Sticky modifiers for the extra-keys bar (Termux-style).
   bool _ctrlHeld = false;
   bool _altHeld = false;
@@ -44,6 +60,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
   /// Terminal font size, persisted across launches.
   static const _fontSizeKey = 'terminal_font_size';
   double _fontSize = 14;
+
+  /// Terminal font + theme packs, persisted across launches.
+  static const _fontPackKey = 'terminal_font_pack';
+  static const _themePackKey = 'terminal_theme_pack';
+  String _fontPack = 'system';
+  String _themePack = 'interlux';
 
   /// Scrollback search state (per screen, always on the active tab).
   bool _searchOpen = false;
@@ -60,9 +82,14 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _targetsStore.load();
     SharedPreferences.getInstance().then((prefs) {
       final size = prefs.getDouble(_fontSizeKey);
-      if (size != null && mounted) {
-        setState(() => _fontSize = size.clamp(10.0, 24.0));
-      }
+      final font = prefs.getString(_fontPackKey);
+      final theme = prefs.getString(_themePackKey);
+      if (!mounted) return;
+      setState(() {
+        if (size != null) _fontSize = size.clamp(10.0, 24.0);
+        if (font != null) _fontPack = fontPackById(font).id;
+        if (theme != null) _themePack = themePackById(theme).id;
+      });
     });
     _addSession();
     // Onboarding prompts run in sequence so dialogs never stack.
@@ -76,7 +103,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     final session = TerminalSession()
       ..targetLabel = targetLabel
       ..command = run;
-    session.addListener(_onSessionChanged);
+    _listen(session);
     if (_searchOpen) _closeSearch();
     setState(() {
       _sessions.add(session);
@@ -94,9 +121,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
     if (_sessions.length == 1) {
       // Never leave the user with no terminal: reset the last tab.
       final fresh = TerminalSession();
-      fresh.addListener(_onSessionChanged);
+      _listen(fresh);
       final old = _sessions[0];
-      old.removeListener(_onSessionChanged);
+      _unlisten(old);
       setState(() {
         _sessions[0] = fresh;
         _activeIndex = 0;
@@ -106,7 +133,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
       return;
     }
     final removed = _sessions[index];
-    removed.removeListener(_onSessionChanged);
+    _unlisten(removed);
     setState(() {
       _sessions.removeAt(index);
       if (_activeIndex >= _sessions.length) {
@@ -116,8 +143,21 @@ class _TerminalScreenState extends State<TerminalScreen> {
     removed.dispose();
   }
 
-  void _onSessionChanged() {
-    final session = _sessions[_activeIndex];
+  /// Attach a listener bound to one specific session (see _sessionListeners).
+  void _listen(TerminalSession session) {
+    void listener() => _onSessionChanged(session);
+    _sessionListeners[session] = listener;
+    session.addListener(listener);
+  }
+
+  void _unlisten(TerminalSession session) {
+    final listener = _sessionListeners.remove(session);
+    if (listener != null) session.removeListener(listener);
+  }
+
+  void _onSessionChanged(TerminalSession session) {
+    // Reports on the session that actually notified, not on whichever tab
+    // happens to be active: see _sessionListeners.
     if (session.error != null) {
       _showError('Could not start the terminal: ${session.error}');
       session.error = null;
@@ -218,12 +258,23 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
   void _shareActiveReport() {
     final session = _active;
+    // The share sheet can fail to present (nothing handles text/plain, or the
+    // sheet is dismissed). Left as a bare call the rejection became an
+    // unhandled async error and the handler died with no feedback at all.
     shareSessionReport(
       terminal: session.terminal,
       sessionName: session.name,
       targetLabel: session.targetLabel,
       command: session.command,
-    );
+    ).catchError((Object error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not share this session.'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    });
   }
 
   void _openTargets() {
@@ -240,6 +291,36 @@ class _TerminalScreenState extends State<TerminalScreen> {
         ),
       ),
     );
+  }
+
+  void _openAgents() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const AgentsScreen()),
+    );
+  }
+
+  /// Paste the clipboard into the active shell.
+  ///
+  /// Uses terminal.paste(), not textInput(): a shell that has advertised
+  /// bracketed paste mode receives the text wrapped in the paste escape
+  /// sequence, so a multi-line paste lands on the prompt as editable literal
+  /// text instead of every newline executing the next line the moment it
+  /// arrives. A shell with no bracketed paste support (plain /system/bin/sh)
+  /// gets plain input -- the same path the keyboard already takes.
+  Future<void> _pasteFromClipboard() async {
+    final text = await DeviceApi.clipboardGet();
+    if (!mounted) return;
+    if (text == null || text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Nothing to paste — the clipboard is empty.'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    _active.terminal.paste(text);
   }
 
   void _sendExtraKey(_ExtraKey extra) {
@@ -269,12 +350,30 @@ class _TerminalScreenState extends State<TerminalScreen> {
     await prefs.setDouble(_fontSizeKey, clamped);
   }
 
-  void _openTextSize() {
+  Future<void> _changeFontPack(String id) async {
+    final pack = fontPackById(id);
+    setState(() => _fontPack = pack.id);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_fontPackKey, pack.id);
+  }
+
+  Future<void> _changeThemePack(String id) async {
+    final pack = themePackById(id);
+    setState(() => _themePack = pack.id);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_themePackKey, pack.id);
+  }
+
+  void _openAppearance() {
     showDialog(
       context: context,
-      builder: (context) => _TextSizeDialog(
+      builder: (context) => _AppearanceDialog(
         size: _fontSize,
-        onChanged: _changeFontSize,
+        fontPack: _fontPack,
+        themePack: _themePack,
+        onSizeChanged: _changeFontSize,
+        onFontChanged: _changeFontPack,
+        onThemeChanged: _changeThemePack,
       ),
     );
   }
@@ -284,9 +383,17 @@ class _TerminalScreenState extends State<TerminalScreen> {
   void _tapLink(TapUpDetails details, CellOffset at) {
     final url = findLinkAt(_active.terminal, at);
     if (url == null || !mounted) return;
+    // Capture the screen's messenger BEFORE the dialog exists. The builder
+    // parameter used to shadow this State's `context`, so the snackbar below
+    // was looked up through the DIALOG's context -- which is unmounted the
+    // moment Navigator.pop runs. The message therefore vanished with the
+    // dialog, which is exactly the "no browser found" case it exists to
+    // report: the user got zero feedback. The builder parameter is renamed
+    // so the shadowing cannot come back.
+    final messenger = ScaffoldMessenger.of(context);
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         backgroundColor: const Color(0xFF1A1A1A),
         title: const Text(
           'Open link?',
@@ -298,22 +405,22 @@ class _TerminalScreenState extends State<TerminalScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('Cancel'),
           ),
           TextButton(
             onPressed: () {
               Clipboard.setData(ClipboardData(text: url));
-              Navigator.pop(context);
+              Navigator.pop(dialogContext);
             },
             child: const Text('Copy'),
           ),
           TextButton(
             onPressed: () async {
-              Navigator.pop(context);
+              Navigator.pop(dialogContext);
               final ok = await DeviceApi.openUrl(url);
-              if (!ok && context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
+              if (!ok && mounted) {
+                messenger.showSnackBar(
                   const SnackBar(
                     content: Text('No browser found for this link.'),
                   ),
@@ -339,9 +446,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _searchFocus.dispose();
     _searchField.dispose();
     for (final session in _sessions) {
-      session.removeListener(_onSessionChanged);
+      _unlisten(session);
       session.dispose();
     }
+    // Created here and previously never released -- a genuine undisposed
+    // disposable that leak_tracker flags in debug builds. It dies with the
+    // screen so the impact is small, but it should not leak.
+    _targetsStore.dispose();
     super.dispose();
   }
 
@@ -354,19 +465,20 @@ class _TerminalScreenState extends State<TerminalScreen> {
         child: Column(
           children: [
             _SessionTabBar(
-              sessions: _sessions,
-              activeIndex: _activeIndex,
-              onSelect: (i) {
-                if (_searchOpen) _closeSearch();
-                setState(() => _activeIndex = i);
-              },
-              onClose: _closeSession,
-              onAdd: _addSession,
-              onTargets: _openTargets,
-              onShare: _shareActiveReport,
-              onSearch: _openSearch,
-              onTextSize: _openTextSize,
-            ),
+                sessions: _sessions,
+                activeIndex: _activeIndex,
+                onSelect: (i) {
+                  if (_searchOpen) _closeSearch();
+                  setState(() => _activeIndex = i);
+                },
+                onClose: _closeSession,
+                onAdd: _addSession,
+                onTargets: _openTargets,
+                onAgents: _openAgents,
+                onShare: _shareActiveReport,
+                onSearch: _openSearch,
+                onTextSize: _openAppearance,
+              ),
             if (_searchOpen) _SearchBar(
               field: _searchField,
               matchText: _matches.isEmpty
@@ -382,32 +494,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 active.terminal,
                 controller: active.controller,
                 onTapUp: (details, at) => _tapLink(details, at),
-                theme: const TerminalTheme(
-            cursor: Color(0xFFE6E6E6),
-            selection: Color(0x40E6E6E6),
-            foreground: Color(0xFFE6E6E6),
-            background: Color(0xFF000000),
-            black: Color(0xFF000000),
-            white: Color(0xFFE6E6E6),
-            red: Color(0xFFCC5555),
-            green: Color(0xFF55CC55),
-            yellow: Color(0xFFCDCD55),
-            blue: Color(0xFF5555CC),
-            magenta: Color(0xFFCC55CC),
-            cyan: Color(0xFF55CDCD),
-            brightBlack: Color(0xFF666666),
-            brightRed: Color(0xFFFF7777),
-            brightGreen: Color(0xFF77FF77),
-            brightYellow: Color(0xFFFFFF77),
-            brightBlue: Color(0xFF7777FF),
-            brightMagenta: Color(0xFFFF77FF),
-            brightCyan: Color(0xFF77FFFF),
-            brightWhite: Color(0xFFFFFFFF),
-            searchHitBackground: Color(0xFFFFB86C),
-            searchHitBackgroundCurrent: Color(0xFFFF5E5E),
-            searchHitForeground: Color(0xFF000000),
-          ),
-          textStyle: TerminalStyle(fontSize: _fontSize),
+                theme: themePackById(_themePack).theme,
+                textStyle: TerminalStyle(
+                  fontSize: _fontSize,
+                  fontFamily: fontPackById(_fontPack).family,
+                ),
           autofocus: true,
           hardwareKeyboardOnly: false,
           simulateScroll: true,
@@ -424,6 +515,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
         onToggleCtrl: () => setState(() => _ctrlHeld = !_ctrlHeld),
         onToggleAlt: () => setState(() => _altHeld = !_altHeld),
         onKey: _sendExtraKey,
+        onPaste: () {
+          _pasteFromClipboard();
+        },
       ),
     ],
   ),
@@ -441,6 +535,7 @@ class _SessionTabBar extends StatelessWidget {
   final void Function(int index) onClose;
   final VoidCallback onAdd;
   final VoidCallback onTargets;
+  final VoidCallback onAgents;
   final VoidCallback onShare;
   final VoidCallback onSearch;
   final VoidCallback onTextSize;
@@ -452,6 +547,7 @@ class _SessionTabBar extends StatelessWidget {
     required this.onClose,
     required this.onAdd,
     required this.onTargets,
+    required this.onAgents,
     required this.onShare,
     required this.onSearch,
     required this.onTextSize,
@@ -531,6 +627,23 @@ class _SessionTabBar extends StatelessWidget {
               ),
               child: const Icon(
                 Icons.radar,
+                size: 16,
+                color: Color(0xFFE6E6E6),
+              ),
+            ),
+          ),
+          GestureDetector(
+            onTap: onAgents,
+            child: Container(
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              margin: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: const Color(0xFF232323),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Icon(
+                Icons.smart_toy,
                 size: 16,
                 color: Color(0xFFE6E6E6),
               ),
@@ -667,36 +780,79 @@ class _SearchBar extends StatelessWidget {
 }
 
 /// Text-size dialog: slider 10–24sp with live preview, persisted.
-class _TextSizeDialog extends StatelessWidget {
+/// Terminal appearance: text size slider + font pack + theme pack.
+/// All three persist via SharedPreferences (see [_TerminalScreenState]).
+class _AppearanceDialog extends StatelessWidget {
   final double size;
-  final ValueChanged<double> onChanged;
+  final String fontPack;
+  final String themePack;
+  final ValueChanged<double> onSizeChanged;
+  final ValueChanged<String> onFontChanged;
+  final ValueChanged<String> onThemeChanged;
 
-  const _TextSizeDialog({required this.size, required this.onChanged});
+  const _AppearanceDialog({
+    required this.size,
+    required this.fontPack,
+    required this.themePack,
+    required this.onSizeChanged,
+    required this.onFontChanged,
+    required this.onThemeChanged,
+  });
 
   @override
   Widget build(BuildContext context) {
+    const label = TextStyle(color: Color(0xFF999999), fontSize: 13);
     return AlertDialog(
       backgroundColor: const Color(0xFF1A1A1A),
       title: const Text(
-        'Text size',
+        'Appearance',
         style: TextStyle(color: Color(0xFFE6E6E6), fontSize: 16),
       ),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            'interlux:/\$ echo Aa',
-            style: TextStyle(color: const Color(0xFFE6E6E6), fontSize: size),
-          ),
-          Slider(
-            value: size,
-            min: 10,
-            max: 24,
-            divisions: 14,
-            label: size.toStringAsFixed(0),
-            onChanged: onChanged,
-          ),
-        ],
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'interlux:/\$ echo Aa',
+              style: TextStyle(
+                color: const Color(0xFFE6E6E6),
+                fontSize: size,
+                fontFamily: fontPackById(fontPack).family,
+              ),
+            ),
+            Slider(
+              value: size,
+              min: 10,
+              max: 24,
+              divisions: 14,
+              label: size.toStringAsFixed(0),
+              onChanged: onSizeChanged,
+            ),
+            const Text('Font', style: label),
+            for (final p in terminalFontPacks)
+              _PackOption(
+                label: p.label,
+                selected: p.id == fontPack,
+                onTap: () {
+                  onFontChanged(p.id);
+                  Navigator.pop(context);
+                },
+              ),
+            const SizedBox(height: 8),
+            const Text('Theme', style: label),
+            for (final p in terminalThemePacks)
+              _PackOption(
+                label: p.label,
+                selected: p.id == themePack,
+                swatch: p.theme.background,
+                onTap: () {
+                  onThemeChanged(p.id);
+                  Navigator.pop(context);
+                },
+              ),
+          ],
+        ),
       ),
       actions: [
         TextButton(
@@ -704,6 +860,59 @@ class _TextSizeDialog extends StatelessWidget {
           child: const Text('Done'),
         ),
       ],
+    );
+  }
+}
+
+/// One selectable row in the appearance dialog: label + checkmark,
+/// optional color swatch preview; tap applies and closes.
+class _PackOption extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final Color? swatch;
+  final VoidCallback onTap;
+
+  const _PackOption({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.swatch,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+        child: Row(
+          children: [
+            if (swatch != null)
+              Container(
+                width: 16,
+                height: 16,
+                margin: const EdgeInsets.only(right: 8),
+                decoration: BoxDecoration(
+                  color: swatch,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: const Color(0xFF444444)),
+                ),
+              ),
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(
+                    color: Color(0xFFE6E6E6), fontSize: 14),
+              ),
+            ),
+            if (selected)
+              const Text(
+                '✓',
+                style: TextStyle(color: Color(0xFF55CC55), fontSize: 14),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -732,6 +941,7 @@ class _ExtraKeysBar extends StatelessWidget {
   final VoidCallback onToggleCtrl;
   final VoidCallback onToggleAlt;
   final void Function(_ExtraKey key) onKey;
+  final VoidCallback onPaste;
 
   const _ExtraKeysBar({
     required this.ctrlHeld,
@@ -739,6 +949,7 @@ class _ExtraKeysBar extends StatelessWidget {
     required this.onToggleCtrl,
     required this.onToggleAlt,
     required this.onKey,
+    required this.onPaste,
   });
 
   static const _keys = [
@@ -770,6 +981,9 @@ class _ExtraKeysBar extends StatelessWidget {
       child: ListView(
         scrollDirection: Axis.horizontal,
         children: [
+          // Paste first: it is the one action a phone keyboard gives you no
+          // key for, so it must be reachable without scrolling the row.
+          _KeyButton(label: 'PASTE', onTap: onPaste),
           _ToggleButton(
             label: 'CTRL',
             active: ctrlHeld,

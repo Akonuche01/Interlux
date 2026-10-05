@@ -117,7 +117,7 @@ object Userland {
     // daemon could be stale for weeks with no signal that anything was wrong.
     // v42 (daemon code sync): the bundled `agent/` had drifted from the repo
     //   copy. `config/section` (the real web_search section), `approval_mode`
-    //   never, and DEFAULT_IDENTITY (the Kara identity leak of 2026-09-27) were
+    //   never, and DEFAULT_IDENTITY (the identity leak of 2026-09-27) were
     //   all still running the older code on device. Assets synced, marker
     //   bumped so this takes effect. wipeExceptHome keeps home/, so
     //   providers.json and the API key survive the re-extract.
@@ -135,7 +135,7 @@ object Userland {
     //   inception.py alike. The daemon saved every turn and read it back, so
     //   history existed on disk, in the RPC payload and in the audit trail the
     //   whole time, and the model still began every turn amnesiac. That is why
-    //   Kara could not answer a question she had asked herself a moment
+    //   the client could not answer a question it had asked itself a moment
     //   earlier. Providers now send the whole labelled conversation via
     //   flatten_messages (media.py). Marker bumped; wipeExceptHome keeps
     //   home/, so providers.json and the API key survive the re-extract.
@@ -145,16 +145,17 @@ object Userland {
     //   `item/completed` carries only a status, so the activity row stayed
     //   empty for the whole call: the card said a command had run and never
     //   said what it was or what it printed. The daemon now broadcasts
-    //   `item/output` (serve.py `_result_output_text`), which Kara maps onto a
-    //   commandExecution outputDelta on the row already on screen.
+    //   `item/output` (serve.py `_result_output_text`), which the client
+    //   maps onto a commandExecution outputDelta on the row already on screen.
     // v46 (no round cap + real steering):
-    //   * Round cap removed. It was 8 from Kara, clamped to 10 here, and hitting
-    //     it severed real work mid-task -- 17 tool calls' results never reached
-    //     an answer -- while the turn was still reported as finished, which is
-    //     the "Done while still working" and "ends half" report. The loop now
-    //     ends when the model stops asking for tools. ROUND_BACKSTOP (100k) and
-    //     TURN_TIME_LIMIT_S (6h) only catch a model that never stops, and a turn
-    //     they cut short is now marked `truncated` rather than `final`.
+    //   * Round cap removed. It was 8 from the client, clamped to 10 here,
+    //     and hitting it severed real work mid-task -- 17 tool calls'
+    //     results never reached an answer -- while the turn was still
+    //     reported as finished, which is the "Done while still working"
+    //     and "ends half" report. The loop now ends when the model stops
+    //     asking for tools. ROUND_BACKSTOP (100k) and TURN_TIME_LIMIT_S
+    //     (6h) only catch a model that never stops, and a turn they cut
+    //     short is now marked `truncated` rather than `final`.
     //   * `turn/steer` no longer kills the running turn and awaits a
     //     replacement. It queues the message, which the running turn picks up at
     //     its next round boundary, and replies immediately -- that reply was
@@ -163,7 +164,129 @@ object Userland {
     // fence-gated live send, convergence-after-scrub, disconnect hook,
     // immediate turn reply, materialized resume, client-tool approval
     // bypass, seeded provider blocks, skills preamble, approval_mode.
-    private const val VERSION = "full-tools-47"
+    // v48 (tool-call parsing + fold echo): two daemon bugs, both silent.
+    //   * Tool calls: the parser required a *closed* ```json fence, and Atria
+    //     routinely writes the opener, the JSON, and then stops without ever
+    //     closing it. Such a round parsed to zero calls, so the tool never ran
+    //     and the turn ended as if the model had simply answered. Parsing now
+    //     accepts closed fences (all of them), an unclosed trailing fence, and
+    //     a fence-less list-of-tools payload, and normalises the shapes models
+    //     actually emit (bare object, {"tool_calls":[...]}, name/arguments).
+    //   * Fold echo: each round was folded into the next round's user-role
+    //     message with no delimiter, so "[assistant round N]:" plus the
+    //     "[shell] ..." result lines read as something the user had said. The
+    //     model quoted the block back, and since that quote was the last thing
+    //     said it was stamped `final` and delivered as the turn's answer --
+    //     the raw machine text in the chat bubble. The fold is now delimited
+    //     as a replay, and a quoted block is stripped before it can be
+    //     treated as output or mistaken for a tool request.
+    //   Both are also why raw call syntax could reach the chat: the scrub
+    //   that removes it was gated on having parsed a call, so the rounds that
+    //   failed to parse were exactly the rounds that leaked. It is now keyed
+    //   on the text having changed instead. Marker bumped; wipeExceptHome
+    //   keeps home/, so providers.json and the API key survive the re-extract.
+    // v50 (pairing + namespacing): the daemon is now a multi-agent
+    //     platform. Step 1: pairing/auth gate (agents.py store, owner
+    //     token minted to the first client, pairing/list|approve|deny|
+    //     revoke|wait RPCs, -32001 gate on live store). Step 2 (threads,
+    //     tools, policy): every thread carries its owner's agent id,
+    //     thread/list filters by owner, cross-agent access refuses with
+    //     -32602, legacy threads migrate to the first paired agent at
+    //     boot, client tools are per-agent owned, policy resolves
+    //     per-agent overrides over globals, audit entries carry
+    //     agent_id, thread broadcasts route to the owner's sockets.
+    //     Marker bumped to force the re-extract: without it the device
+    //     keeps the pre-pairing daemon and every disconnect crashes.
+    // v51 (namespacing finish): per-thread broadcast routing (serve.py
+    //     wraps transport.broadcast, injecting the owner's agent_id from
+    //     a cached thread->agent lookup), and the boot migration prefers
+    //     the first non-owner agent — pre-pairing traffic came from AI
+    //     clients, never from the owner app, so legacy threads land on
+    //     the first client instead of interlux-app. Marker bumped: v50's marker
+    //     would otherwise skip the re-extract and keep the old daemon.
+    // v52 (namespacing fixes): missing agent_policy import (every turn
+    //     and the policy RPC died with -32700 since v51), plus a routing
+    //     log line so the next adversarial test can prove which broadcast
+    //     path executes. Marker bumped to ship the fix.
+    // v53 (namespacing holes): thread/resume refused cross-agent (it
+    //     returned full history — the live log showed resume succeeding
+    //     where read refused), and audit replay drops turns owned by
+    //     another agent. Marker bumped to ship the fix.
+    // v54 (duplicate broadcast): my routing edit added a second
+    //     transport.broadcast without removing the original, and Python
+    //     binds the last def — every thread event went to all clients.
+    //     The original is deleted; AST-checked for other duplicate defs
+    //     (none). Marker bumped to ship the fix.
+    // v55 (tool-call XML dialect): free-tier models emit <tool_call>
+    //     XML instead of fenced JSON, which streamed raw into chat while
+    //     the tool never ran. The extractor now parses the observed
+    //     flavors (arg_key/arg_value pairs, JSON-in-tags, bare tag),
+    //     tolerates unclosed spans and zero-width junk, strips spans
+    //     even when unparseable, and warning-logs those (fail loud).
+    //     Unknown tool names already error loudly downstream. Marker
+    //     bumped to ship the fix.
+    // v56 (stranded turns): the provider-error path ended the turn
+    //     without broadcasting turn/completed, so every 402/429 left
+    //     the client on "Working" with a dead stop button until app restart.
+    //     It now sends error + turn/completed like the crash path.
+    //     Marker bumped to ship the fix.
+    // v57 (per-agent credentials): provider/tool api_keys move out of
+    //     the shared file top level into agents.<id> sections. Reads
+    //     mask against the caller's key only, writes land in the
+    //     caller's section, turns/models/discovery authenticate with
+    //     the caller's key, and boot migrates legacy global keys to
+    //     the first non-owner agent. Marker bumped to ship it.
+    // v58 (quotas, part 1 — concurrency): per-agent live-turn slots
+    //     (default cap 4, owner structurally exempt), excess starts
+    //     refused with typed -32002 quota-exceeded, slots released on
+    //     every turn end path; subagent turns attributed to the parent
+    //     thread's owner. Marker bumped to ship it.
+    // v59 (quotas, part 2 — budgets/ceiling/admin): token budgets
+    //     truncate over-budget turns with a note (owner exempt), spend
+    //     accrues persisted per turn on all end paths, per-agent turn
+    //     ceiling narrows the backstop (never the owner), usage rides
+    //     the resolved policy for observability, policy RPC manages
+    //     quotas/usage-reset (owner-only targeting), and revoke wipes
+    //     credentials+quota+usage with the identity. Marker bumped.
+    // v60 (broken call syntax): a round whose fence/XML matched but
+    //     parsed to nothing now spends one round asking for a clean
+    //     re-emit instead of delivering narration as the answer while
+    //     nothing runs; valid-JSON non-call fences still count as
+    //     answers. Plus path context in the agency prompt (userland
+    //     home, shared storage, never /data/data/). Marker bumped.
+    // v61 (isolation + robustness batch): cross-agent checks on turn,
+    //     steer, fork, cancel and subagents; session grants recorded
+    //     per-agent (they never took effect); approvals answerable
+    //     only by the thread owner; cancel actually kills subprocesses
+    //     (tracked by turn id); shell/git/pkg timeouts; per-agent keys
+    //     in image/review/web_search; strict-decode hardening;
+    //     non-blocking inception/tabs; AgentWs + Agents screen fixes;
+    //     anthropic x-api-key; tokenharbor model id; utcnow. Marker bumped.
+    // v62 (isolation batch 2 + ops): fs tools deny daemon-internal
+    //     paths to non-owners; image reads confined to home/shared
+    //     storage; exec calls attributed; hot-path logs demoted (plus
+    //     no secrets in tool-call logs); daemon restarts when the
+    //     userland marker changed (no more stale code serving); bots
+    //     autostart union, stop validation, crash-loop guard, log
+    //     rotation; backups off (tokens never leave the device).
+    //     Marker bumped.
+    // v63 (rebuild fidelity): persisted tool sections wrapped in
+    //     [tool]...[/tool] markers so reopened chats rebuild activity
+    //     rows instead of one heavy machine-text card; broken call
+    //     syntax spends one round asking for a clean re-emit; asterisk
+    //     dividers stripped fence-aware; path context in the prompt.
+    //     Marker bumped.
+    // v64 (owner consent gate): owner-set passphrase (hash only) marks
+    //     turns carrying it owner-authorized; the word is stripped
+    //     before persist/model/audit; the turn gets an authorization
+    //     note plus the pentest skill body; management is owner-only;
+    //     resolved policy carries only the caller's sanitized section.
+    //     Marker bumped.
+    // Bumped 2026-10-05: the bundled agent/ mirror had drifted 18 runtime files
+    // out of sync with agent/ (and was missing three), so a device re-extracting
+    // its userland got the OLD daemon. Raising this is what makes the shipped
+    // tree pick up the re-sync plus every fix in it.
+    private const val VERSION = "full-tools-65"
     private const val ASSET_DIR = "userland"
     private const val DIR_NAME = "userland"
 
@@ -203,6 +326,13 @@ object Userland {
      * The outcome is mirrored to the public Downloads log so it can be
      * diagnosed from outside the app.
      */
+    // ensure() is reachable concurrently: TerminalService -> AgentDaemon.ensure
+    // and the Pty "start" handler both call it, and nothing held a lock. Two
+    // threads could pass the stale-marker check below and then race inside
+    // wipeExceptHome(), deleting files the other thread was writing -- and
+    // copyAsset writes in place with no temp-file-and-rename, so a truncated
+    // busybox could be recorded as a valid install. Serialise the whole body.
+    @Synchronized
     fun ensure(context: Context): File {
         val dir = File(context.filesDir, DIR_NAME)
         if (!dir.exists()) dir.mkdirs()
@@ -214,6 +344,7 @@ object Userland {
             return dir
         }
 
+        val busybox = File(dir, "busybox")
         try {
             // Fresh layout: wipe everything except the user's home (which may
             // hold a downloaded Alpine guest worth keeping across updates).
@@ -234,11 +365,29 @@ object Userland {
             fixExecBits(dir)
             val shebangs = fixShebangs(dir)
             val links = createSymlinks(context, dir)
-            marker.writeText(VERSION)
             pruneBionicDb(dir)
             com.keneristudios.interlux.BootTracer.stepPublic(
                 "userland: assets copied, symlinks=$links shebangs=$shebangs"
             )
+
+            // Stage 3 foundation: POSIX home layout + login profile + fetch helper.
+            // busybox already ships wget/tar/gzip/unzip applets, so extra tools are
+            // downloaded at runtime instead of bloating the APK. See
+            // docs/STAGE3_USERLAND_PLAN.md.
+            installCaBundle(dir)
+            writeProfile(dir)
+            File(dir, "tmp").mkdirs()
+            File(dir, "home").mkdirs()
+
+            // Stamp the marker LAST, only once everything above has succeeded.
+            // It used to be written straight after the asset copy while
+            // installCaBundle / writeProfile / tmp / home sat OUTSIDE this try,
+            // so a throw there left a directory claiming VERSION with no CA
+            // bundle, no profile, no home and no tmp -- and the stale-marker
+            // check at the top then trusted it for good, until the next VERSION
+            // bump. Visible symptom: silent TLS failure on every curl/wget/
+            // python call, with no error recorded anywhere.
+            marker.writeText(VERSION)
         } catch (e: Exception) {
             com.keneristudios.interlux.BootTracer.stepPublic(
                 "userland: FAILED ${e.javaClass.simpleName}: ${e.message}"
@@ -246,15 +395,6 @@ object Userland {
             throw e
         }
 
-        val busybox = File(dir, "busybox")
-        // Stage 3 foundation: POSIX home layout + login profile + fetch helper.
-        // busybox already ships wget/tar/gzip/unzip applets, so extra tools are
-        // downloaded at runtime instead of bloating the APK. See
-        // docs/STAGE3_USERLAND_PLAN.md.
-        installCaBundle(dir)
-        writeProfile(dir)
-        File(dir, "tmp").mkdirs()
-        File(dir, "home").mkdirs()
         val appletCount = countApplets(busybox)
         val caSize = caFile(dir).let { if (it.exists()) it.length() else -1 }
         val curlVer = curlVersion(dir)
@@ -321,6 +461,12 @@ object Userland {
             export GOCACHE="${dir.absolutePath}/home/.cache/go-build"
             export GOPATH="${dir.absolutePath}/home/go"
             export PATH="${dir.absolutePath}/lib/jvm/java-17-openjdk/bin:${'$'}PATH"
+            # C toolchain: ndk-sysroot headers live at top level, not under
+            # usr/ — hand clang/gcc the explicit search paths so bare `cc`
+            # works (proven 2026-10-01: hello-from-device-clang). Harmless
+            # when the toolchain is absent.
+            export CFLAGS="-I${dir.absolutePath}/include -I${dir.absolutePath}/include/aarch64-linux-android"
+            export LDFLAGS="-L${dir.absolutePath}/lib -L${dir.absolutePath}/lib/aarch64-linux-android"
             # 3a TLS: Mozilla CA bundle so HTTPS (wget/curl/python) verifies.
             export SSL_CERT_FILE="${dir.absolutePath}/etc/ssl/certs/ca-certificates.crt"
             export CURL_CA_BUNDLE="${'$'}SSL_CERT_FILE"

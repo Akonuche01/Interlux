@@ -15,6 +15,20 @@ import urllib.request
 from typing import AsyncIterator, Callable
 
 
+def _put(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue,
+         item) -> None:
+    """Threadsafe queue put that survives loop shutdown.
+
+    call_soon_threadsafe raises RuntimeError once the loop is closed
+    (turn cancelled, daemon stopping). Swallowing only that keeps
+    shutdown quiet without hiding real errors, which still raise.
+    """
+    try:
+        loop.call_soon_threadsafe(queue.put_nowait, item)
+    except RuntimeError:
+        pass
+
+
 def openai_chunks(obj: dict) -> list[str]:
     out = []
     for choice in obj.get("choices", []) or []:
@@ -33,6 +47,76 @@ def openai_reasoning(obj: dict) -> list[str]:
         if isinstance(text, str) and text:
             out.append(text)
     return out
+
+
+def _summary_text(obj: dict) -> str:
+    """The reasoning summary carried by one stream object, or "".
+
+    Read from wherever it appears: Inception puts it at the top level of
+    the object (a sibling of `choices`), the same shape its non-streaming
+    response uses, while an OpenAI-style relay nests it in the delta. The
+    value is either the text itself or a `{content, status}` object -- the
+    documented ReasoningSummary shape -- so both are accepted.
+    """
+    sources = [obj]
+    for choice in obj.get("choices", []) or []:
+        if isinstance(choice, dict):
+            delta = choice.get("delta")
+            if isinstance(delta, dict):
+                sources.append(delta)
+    for source in sources:
+        raw = source.get("reasoning_summary")
+        if isinstance(raw, str) and raw:
+            return raw
+        if isinstance(raw, dict):
+            text = raw.get("content")
+            if isinstance(text, str) and text:
+                return text
+    return ""
+
+
+def make_openai_reasoning() -> Callable[[dict], list[str]]:
+    """Stateful reasoning reader for OpenAI-compatible streams.
+
+    A reader is stateful because the two shapes disagree about what a
+    chunk means. `reasoning_content` (DeepSeek) is a fragment: every chunk
+    adds to the thought. `reasoning_summary` (Inception Mercury) is the
+    whole thought so far, re-sent as it grows. Emitting either verbatim
+    would therefore either duplicate the summary on every chunk or drop
+    all but the first fragment.
+
+    Reconciling against what has already gone out handles both: a summary
+    that extends the last one yields only its new tail, a fragment that
+    does not yields itself. Without this the thoughts section stays empty
+    on Mercury -- see the reader in openai.py, which asked for no summary
+    at all until now.
+    """
+    seen = {"summary": ""}
+
+    def read(obj: dict) -> list[str]:
+        out: list[str] = []
+        for choice in obj.get("choices", []) or []:
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta")
+            if not isinstance(delta, dict):
+                continue
+            text = delta.get("reasoning_content")
+            if not (isinstance(text, str) and text):
+                text = delta.get("reasoning")
+            if isinstance(text, str) and text:
+                out.append(text)
+        summary = _summary_text(obj)
+        if summary:
+            previous = seen["summary"]
+            fresh = summary[len(previous):] if summary.startswith(
+                previous) else summary
+            if fresh:
+                seen["summary"] = summary
+                out.append(fresh)
+        return out
+
+    return read
 
 
 def _num(value) -> int:
@@ -150,6 +234,19 @@ def _fallback_usage(body: str) -> dict | None:
     data = _fallback_body(body)
     if not data:
         return None
+    usage = data.get("usage")
+    if isinstance(usage, dict) and (
+        "input_tokens" in usage or "output_tokens" in usage
+    ):
+        # Anthropic counts. openai_usage reads the SAME dict, finds no
+        # prompt_tokens/completion_tokens, and returns a truthy ALL-ZERO
+        # dict -- so the old `openai_usage(data) or anthropic_usage(data)`
+        # short-circuited and anthropic_usage was never reached, silently
+        # reporting zero tokens for every non-streamed Anthropic turn.
+        # Detect the shape; simply swapping the order is not enough,
+        # because anthropic_usage would then answer all-zero for OpenAI
+        # bodies (it reads the same absent keys).
+        return anthropic_usage(data)
     return openai_usage(data) or anthropic_usage(data)
 
 
@@ -158,16 +255,23 @@ async def post_sse(
     headers: dict,
     payload: dict,
     chunks_from: Callable[[dict], list[str]],
+    reasoning_from: Callable[[dict], list[str]],
     timeout: int = 120,
     usage_from: Callable[[dict], dict | None] | None = None,
-    reasoning_from: Callable[[dict], list[str]] | None = None,
 ) -> AsyncIterator[dict]:
     """Yield text_delta dicts as SSE chunks arrive, then stop (caller sends complete).
 
     usage_from maps a parsed SSE object (or full body) to a usage fragment;
     fragments merge into one running total emitted as {"type": "usage"}.
+
     reasoning_from maps an object to thinking fragments, emitted as
     {"type": "reasoning_delta"} — kept out of the answer stream.
+
+    reasoning_from is required, not optional. While it had a default, an
+    adapter that simply forgot to pass one lost the thought section of the
+    client's card -- for that provider only, with no error, no log line and
+    nothing to notice. Requiring it turns a silent capability loss into a
+    failure at load time. See the contract in base.py.
     """
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
@@ -183,9 +287,8 @@ async def post_sse(
             if not fragment:
                 return
             running_usage = merge_usage(running_usage, fragment)
-            loop.call_soon_threadsafe(
-                queue.put_nowait, {"type": "usage", "usage": dict(running_usage)}
-            )
+            _put(loop, queue,
+                 {"type": "usage", "usage": dict(running_usage)})
 
         try:
             req = urllib.request.Request(
@@ -210,25 +313,22 @@ async def post_sse(
                         emit_usage(usage_from(obj))
                     for chunk in chunks_from(obj):
                         got_chunk = True
-                        loop.call_soon_threadsafe(queue.put_nowait, chunk)
-                    if reasoning_from is not None:
-                        for r in reasoning_from(obj):
-                            loop.call_soon_threadsafe(
-                                queue.put_nowait,
-                                {"type": "reasoning_delta", "content": r})
+                        _put(loop, queue, chunk)
+                    for r in reasoning_from(obj):
+                        _put(loop, queue,
+                             {"type": "reasoning_delta", "content": r})
             if not got_chunk:
                 raw = "".join(raw_parts)
                 fallback = _fallback_content(raw)
                 if fallback:
-                    loop.call_soon_threadsafe(queue.put_nowait, fallback)
+                    _put(loop, queue, fallback)
                 if usage_from is not None:
                     emit_usage(_fallback_usage(raw))
         except Exception as e:
-            loop.call_soon_threadsafe(
-                queue.put_nowait, {"type": "error", "message": str(e)}
-            )
+            # Shutdown-safe put (see _put): the loop may be gone here.
+            _put(loop, queue, {"type": "error", "message": str(e)})
         finally:
-            loop.call_soon_threadsafe(queue.put_nowait, done)
+            _put(loop, queue, done)
 
     threading.Thread(target=work, daemon=True).start()
     while True:
