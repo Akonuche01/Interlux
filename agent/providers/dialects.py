@@ -86,12 +86,24 @@ def discover(package: str | None = None) -> dict[str, DialectSpec]:
                 f"providers/{info.name}.py declares DIALECT '{dialect}' but no "
                 f"ADAPTER; a format must say which class speaks it"
             )
-        found[dialect] = DialectSpec(
+        spec = DialectSpec(
             name=dialect,
             adapter=adapter,
             canonical_base=str(getattr(module, "CANONICAL_BASE", "") or ""),
             module=info.name,
         )
+        found[dialect] = spec
+        # Backward-compat aliases (e.g. "local" -> "on-device"). This is data,
+        # not a vendor list: an alias only points at a format that already
+        # declared itself, so nothing is enumerated centrally.
+        for alias in getattr(module, "DIALECT_ALIASES", []) or []:
+            if isinstance(alias, str) and alias and alias not in found:
+                found[alias] = DialectSpec(
+                    name=alias,
+                    adapter=adapter,
+                    canonical_base=spec.canonical_base,
+                    module=info.name,
+                )
     return found
 
 
@@ -129,6 +141,12 @@ def build_provider(name: str, section: dict) -> BaseProvider | None:
     if not isinstance(section, dict):
         section = {}
     dialect = dialect_of(section)
+    # A provider section named "local" is the on-device backend, even with no
+    # explicit dialect (legacy config). The Kotlin LlamaServer still refers to
+    # it as the "local" provider, so keep that name resolving after the dialect
+    # was renamed to "on-device".
+    if name == "local" and dialect in (DEFAULT_DIALECT, ""):
+        dialect = "on-device"
     spec = DIALECTS.get(dialect)
     if spec is None:
         raise UnknownDialect(

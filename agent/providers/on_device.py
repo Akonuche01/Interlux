@@ -17,6 +17,10 @@ from .openai import OpenAIProvider
 # A module that declares DIALECT is a wire format; the engine finds formats by
 # scanning this package. See dialects.py.
 DIALECT = "on-device"
+# Legacy name this backend was registered under before discovery became
+# dialect-based. Kept so existing configs (and the Kotlin side, which still
+# calls this the "local" provider) keep resolving without an edit.
+DIALECT_ALIASES = ["local"]
 CANONICAL_BASE = "http://127.0.0.1:4602/v1"
 
 
