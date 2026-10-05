@@ -16,7 +16,6 @@ from . import calls as calls_mod
 from .home import engine_home
 from . import mcp as mcp_mod
 from . import pconfig as pconfig_mod
-from . import localmodels
 from . import threads as threads_mod
 from . import toolargs as toolargs_mod
 from .pconfig import (
@@ -478,12 +477,10 @@ def _agents_configured() -> bool:
 
 # Methods reachable without a paired agent: self-description,
 # handshake, and the pairing plane itself (owner-gated inside).
-# `local_models` is read-only discovery of on-device models so any agent
-# (paired or not) can find the loopback OpenAI endpoints.
 _PUBLIC_METHODS = ("capabilities", "initialize",
                    "pairing/list", "pairing/approve",
                    "pairing/deny", "pairing/revoke",
-                   "pairing/wait", "local_models")
+                   "pairing/wait")
 
 
 def _not_paired(request_id) -> dict:
@@ -2429,8 +2426,7 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                         "tools_refresh", "tools", "tools/register",
                         "tools/unregister", "policy", "skills", "mcp",
                         "providers", "config/section", "turn/steer",
-                        "model/list", "local_models",
-                        "local/start", "local/stop",
+                        "model/list",
                         "pairing/list", "pairing/approve",
                         "pairing/deny", "pairing/revoke",
                         "thread/resume", "thread/fork", "thread/compact",
@@ -2893,37 +2889,7 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                     section = dict(section)
                     section["base_url"] = base_for(section)
                 out.append(public_section(n, section))
-            # Discover any on-device GGUF the user dropped in -- nothing is
-            # hardcoded. Each is a `local` provider (OpenAI-compatible
-            # loopback endpoint) any agent can consume. Skip ids that a
-            # configured provider already claimed.
-            for m in localmodels.discover():
-                block = localmodels.as_provider_block(m)
-                if any(b.get("provider") == block["provider"] for b in out):
-                    continue
-                out.append(block)
             return {"id": request_id, "result": {"providers": out}}
-
-        if method == "local_models":
-            # Read-only discovery of on-device models (running state + the
-            # loopback OpenAI URL). Re-scanned every call, so a model the
-            # user just downloaded shows up immediately -- no restart.
-            return {"id": request_id, "result": {"models": localmodels.list_models()}}
-
-        if method in ("local/start", "local/stop"):
-            mid = str(params.get("id") or params.get("model") or "")
-            if not mid:
-                return {"id": request_id, "error": {
-                    "code": -32602, "message": "missing model id"}}
-            if env_pinned():
-                return {"id": request_id, "error": {"code": -32602, "message": (
-                    "config is env-pinned (INTERLUX_PROVIDERS); "
-                    "local model control refused")}}
-            if method == "local/start":
-                result = localmodels.ensure(mid)
-            else:
-                result = localmodels.stop(mid)
-            return {"id": request_id, "result": result}
 
         if method == "config/section":
             # One non-provider section of the provider config -- today only
@@ -2982,14 +2948,6 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
             name = str(params.get("provider") or "")
             me = _caller_agent(client_socket) or ""
             if name:
-                # Local (on-device) models are not providers.json sections,
-                # but they are first-class: report the model so the composer
-                # can select it without a live /models probe.
-                for m in localmodels.discover():
-                    if m["id"] == name:
-                        return {"id": request_id, "result": {
-                            "provider": name, "default": m["name"],
-                            "models": [{"id": m["name"], "source": "local"}]}}
                 try:
                     return {"id": request_id,
                             "result": await list_models(name, me)}
@@ -3966,18 +3924,6 @@ def main() -> int:
             on_disconnect.append(_cancel_runs_on_disconnect)
             on_disconnect.append(_drop_socket)
             on_connect.append(_resend_approvals)
-            # Bring back any local models the user left running (non-blocking):
-            # survives app kills and reboots because the service restarts the
-            # daemon, which restarts these detached servers.
-            try:
-                started = localmodels.autostart()
-                if started:
-                    logger.info(f"local models autostarted: {started}")
-                # Always publish the discovery file so non-Interlux agents can
-                # find the loopback OpenAI endpoints without the RPC.
-                localmodels.write_registry()
-            except Exception:
-                logger.exception("local model autostart failed")
             transport = Transport(handle_request, args.port)
             await transport.start()
         finally:

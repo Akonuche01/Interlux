@@ -23,7 +23,6 @@ from pathlib import Path
 
 from .home import engine_config_dir
 from .providers import BaseProvider, UnknownDialect, base_for, build_provider
-from .providers.dialects import dialect_of
 from .providers.base import BROWSER_UA
 
 logger = logging.getLogger("pconfig")
@@ -267,10 +266,6 @@ def public_section(name: str, section: dict) -> dict:
         "base_url": str(section.get("base_url", "") or ""),
         "has_key": bool(key),
         "key_hint": mask_key(key),
-        # A provider speaking the on-device dialect is a local model served
-        # from this device -- Kara gives those their own card, and any agent
-        # can treat the endpoint as a plain OpenAI server.
-        "local": dialect_of(section) == "on-device",
     }
 
 

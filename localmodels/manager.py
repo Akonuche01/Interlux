@@ -1,15 +1,21 @@
-"""Local-model registry and per-model llama-server management.
+"""The local-model manager: discovery, ports, serving, registry.
 
-The daemon OWNS on-device inference. Every GGUF the user drops into the
-models directory becomes a local model automatically -- nothing is
-hardcoded. Each model gets a stable loopback port and its own
-llama-server process, spawned *detached* (its own session, reparented
-to init) so it survives the daemon -- and the app -- being killed.
+Self-contained on purpose. It resolves its own paths from the environment
+or its own location and imports nothing from the daemon, so the two can
+evolve -- or be shipped -- independently. On the device this package sits
+at ``<userland>/localmodels/``; on the host it sits at ``<repo>/localmodels/``.
 
-Every server is a plain OpenAI-compatible endpoint
-(http://127.0.0.1:<port>/v1) that ANY agent can speak, and a registry
-file (local_models.json) lets non-Interlux agents discover them without
-knowing the daemon protocol at all.
+Runtime shape:
+
+  * every ``*.gguf`` under the models directory is a model, re-scanned on
+    every call -- nothing is hardcoded,
+  * each model gets a stable loopback port derived from its path,
+  * each runs as its own ``llama-server`` process, spawned *detached* (its
+    own session, reparented to init) so it survives the manager, the app,
+    and the daemon being killed,
+  * a registry file lists the endpoints for any agent to discover.
+
+The daemon is not involved at any point.
 """
 
 from __future__ import annotations
@@ -22,21 +28,45 @@ import subprocess
 import time
 from pathlib import Path
 
-from .home import engine_config_dir, engine_home, engine_userland_dir
+# ``<userland>/localmodels`` on device, ``<repo>/localmodels`` on the host.
+_HERE = Path(__file__).resolve().parent
 
-MODELS_DIR = engine_home() / ".models"
-BIN = engine_userland_dir() / "bin" / "llama-server"
-PORT_BASE = 4602
-PORT_POOL = 96  # 4602..4697, collision-checked
-AUTOSTART_FILE = engine_config_dir() / "local_autostart.json"
-REGISTRY_FILE = engine_config_dir() / "local_models.json"
+
+def userland_dir() -> Path:
+    """The userland root -- the home's parent, where bin/ and this package live."""
+    env = os.environ.get("INTERLUX_USERLAND")
+    if env:
+        return Path(env).expanduser()
+    return _HERE.parent
+
+
+def home_dir() -> Path:
+    """The user's home: ``$HOME`` when set, else ``<userland>/home``."""
+    env = os.environ.get("HOME")
+    if env:
+        return Path(env).expanduser()
+    derived = userland_dir() / "home"
+    if derived.is_dir():
+        return derived
+    return Path.home()
+
+
+MODELS_DIR = home_dir() / ".models"
+BIN = userland_dir() / "bin" / "llama-server"
+STATE_DIR = home_dir() / ".interlux" / "localmodels"
+REGISTRY_FILE = STATE_DIR / "local_models.json"
+AUTOSTART_FILE = STATE_DIR / "autostart.json"
+
+PORT_BASE = 4603
+PORT_POOL = 95  # 4603..4697; 4602 is reserved for the gateway (the daemon's
+                # on-device / "local" canonical base) so it never collides.
 
 # id -> {"proc": Popen|None, "port": int, "path": str}
 _running: dict[str, dict] = {}
 
 
 def _port_for(path: Path) -> int:
-    """Stable port for a model path (hash-based, collision-checked)."""
+    """Stable port for a model path (hash-based)."""
     h = hash(str(path.resolve())) & 0xFFFFFFFF
     return PORT_BASE + (h % PORT_POOL)
 
@@ -89,8 +119,8 @@ def _pid_for_port(port: int) -> int | None:
         if not d.is_dir() or not d.name.isdigit():
             continue
         try:
-            cmd = Path(d, "cmdline").read_bytes()
-            cmd = cmd.replace(b"\x00", b" ").decode("utf-8", "replace")
+            cmd = Path(d, "cmdline").read_bytes().replace(b"\x00", b" ")
+            cmd = cmd.decode("utf-8", "replace")
         except OSError:
             continue
         if "llama-server" in cmd and want in cmd:
@@ -144,41 +174,37 @@ def add_autostart(model_id: str) -> None:
 
 
 def remove_autostart(model_id: str) -> None:
-    ids = [i for i in _autostart_load() if i != model_id]
-    _autostart_save(ids)
+    _autostart_save([i for i in _autostart_load() if i != model_id])
 
 
 def ensure(model_id: str, block: bool = True) -> dict:
     """Start the model's llama-server if not already up.
 
-    The process is spawned detached (new session) so it outlives the
-    daemon and the app. Starting a model opts it into the autostart list,
-    so it comes back on the next daemon boot / app restart.
+    Spawned detached (new session) so it outlives this process and the app.
+    Starting a model opts it into the autostart list.
     """
     target = _find(model_id)
     if target is None:
         return {"ok": False, "error": f"no such local model: {model_id}"}
     port = _port_for(Path(target["path"]))
     if is_up(port):
-        _running[model_id] = {"proc": None, "port": port,
-                              "path": target["path"]}
+        _running[model_id] = {"proc": None, "port": port, "path": target["path"]}
         add_autostart(model_id)
         write_registry()
         return {"ok": True, "running": True, "port": port}
     if not BIN.is_file() or not os.access(str(BIN), os.X_OK):
         return {"ok": False,
-                "error": "llama-server binary missing at bin/llama-server "
-                         "(bundle an Android ARM64 llama-server build into the userland bin/)"}
-    userland = engine_userland_dir()
+                "error": f"llama-server binary missing at {BIN}"}
+    userland = userland_dir()
     env = os.environ.copy()
     env["LD_LIBRARY_PATH"] = f"{userland}/lib:{userland}"
-    env["HOME"] = str(userland / "home")
+    env["HOME"] = str(home_dir())
     env["OPENSSL_CONF"] = "/dev/null"
-    log = engine_config_dir() / f"llama-{model_id}.log"
+    log = STATE_DIR / f"llama-{model_id}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     kwargs: dict = {
         "env": env,
-        "cwd": str(userland / "home"),
+        "cwd": str(home_dir()),
         "stdout": str(log),
         "stderr": subprocess.STDOUT,
         "stdin": subprocess.DEVNULL,
@@ -263,6 +289,7 @@ def list_models() -> list[dict]:
 
 
 def as_provider_block(model: dict) -> dict:
+    """A provider-shaped block any agent can consume directly."""
     port = _port_for(Path(model["path"]))
     return {
         "provider": model["id"],
