@@ -167,7 +167,8 @@ def ensure(model_id: str, block: bool = True) -> dict:
         return {"ok": True, "running": True, "port": port}
     if not BIN.is_file() or not os.access(str(BIN), os.X_OK):
         return {"ok": False,
-                "error": "llama-server binary missing (pkg.sh install llama-cpp)"}
+                "error": "llama-server binary missing at bin/llama-server "
+                         "(bundle an Android ARM64 llama-server build into the userland bin/)"}
     userland = engine_userland_dir()
     env = os.environ.copy()
     env["LD_LIBRARY_PATH"] = f"{userland}/lib:{userland}"
