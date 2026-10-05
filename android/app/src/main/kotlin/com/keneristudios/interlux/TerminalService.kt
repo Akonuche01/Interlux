@@ -51,7 +51,10 @@ class TerminalService : Service() {
         Thread {
             com.keneristudios.interlux.agent.AgentDaemon.ensure(this)
             com.keneristudios.interlux.agent.TabBridge.ensure(this)
-            com.keneristudios.interlux.agent.LlamaServer.ensure(this)
+            // Local models are owned by the daemon now (agent/localmodels.py):
+            // it discovers every GGUF in the models dir and serves each on its
+            // own detached llama-server, autostarting the user's selection
+            // after a kill/reboot. No hardcoded launcher here.
             // Bot watchdog alarm (idempotent arm). Autostart itself stays
             // opt-in via the bots.autostart file — see BotSupervisor.
             com.keneristudios.interlux.agent.BotWatchdog.arm(this)
