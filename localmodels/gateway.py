@@ -50,6 +50,25 @@ def _match(name: str) -> dict | None:
     return models[0]
 
 
+def _upstream_ready(port: int) -> bool:
+    """True once the model's server answers, not merely listens.
+
+    llama-server opens its socket before the weights finish loading; a call
+    that arrives in that window gets a 503 \"Loading model\".
+    """
+    if not m.is_up(port):
+        return False
+    try:
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+        c.request("GET", "/v1/models")
+        r = c.getresponse()
+        r.read()
+        c.close()
+        return r.status == 200
+    except OSError:
+        return False
+
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = "localmodels-gateway/1"
     protocol_version = "HTTP/1.1"
@@ -108,10 +127,11 @@ class _Handler(BaseHTTPRequestHandler):
         port = target["port"]
         if not m.is_up(port):
             m.ensure(target["id"], block=False)
-            deadline = time.time() + _START_WAIT_S
-            while time.time() < deadline and not m.is_up(port):
-                time.sleep(1)
-        if not m.is_up(port):
+        # Wait for the model to be READY, not merely for the port to open.
+        deadline = time.time() + _START_WAIT_S
+        while time.time() < deadline and not _upstream_ready(port):
+            time.sleep(1)
+        if not _upstream_ready(port):
             self._json(503, {"error": {
                 "message": f"local model '{target['id']}' did not come up"}})
             return
@@ -119,7 +139,12 @@ class _Handler(BaseHTTPRequestHandler):
         # the response's "model" field honest.
         body["model"] = target["name"]
         payload = json.dumps(body).encode()
-        upstream_path = "/v1/" + path.split("/")[-1]  # chat/completions|completions
+        # Keep chat a chat call: the last path segment alone ("completions")
+        # would mis-route a chat request to the legacy completions API, which
+        # then demands a "prompt" key.
+        upstream_path = ("/v1/chat/completions"
+                         if path.endswith("chat/completions")
+                         else "/v1/completions")
         try:
             conn = http.client.HTTPConnection("127.0.0.1", port, timeout=600)
             conn.request("POST", upstream_path, payload,

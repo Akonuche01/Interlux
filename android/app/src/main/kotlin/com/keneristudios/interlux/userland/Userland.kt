@@ -286,7 +286,7 @@ object Userland {
     // out of sync with agent/ (and was missing three), so a device re-extracting
     // its userland got the OLD daemon. Raising this is what makes the shipped
     // tree pick up the re-sync plus every fix in it.
-    private const val VERSION = "full-tools-69"
+    private const val VERSION = "full-tools-72"
     private const val ASSET_DIR = "userland"
     private const val DIR_NAME = "userland"
 
@@ -420,6 +420,7 @@ object Userland {
      */
     private val assetTrees = listOf(
         "bin", "lib", "libexec", "share", "etc", "agent", "site-packages",
+        "localmodels",
     )
 
     private fun caFile(dir: File) =

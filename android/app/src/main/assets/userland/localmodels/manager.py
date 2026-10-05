@@ -205,20 +205,26 @@ def ensure(model_id: str, block: bool = True) -> dict:
     kwargs: dict = {
         "env": env,
         "cwd": str(home_dir()),
-        "stdout": str(log),
         "stderr": subprocess.STDOUT,
         "stdin": subprocess.DEVNULL,
     }
     if os.name == "posix":
         kwargs["start_new_session"] = True  # reparent to init
+    # Popen wants a FILE OBJECT for stdout, not a path string.
+    try:
+        log_fh = open(log, "ab")
+    except OSError as e:
+        return {"ok": False, "error": f"cannot open log: {e}"}
     try:
         proc = subprocess.Popen(
             [str(BIN), "-m", target["path"], "--host", "127.0.0.1",
              "--port", str(port), "-c", "2048"],
-            **kwargs,
+            stdout=log_fh, **kwargs,
         )
     except OSError as e:
         return {"ok": False, "error": f"spawn failed: {e}"}
+    finally:
+        log_fh.close()
     _running[model_id] = {"proc": proc, "port": port, "path": target["path"]}
     add_autostart(model_id)
     if not block:
