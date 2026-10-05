@@ -61,6 +61,11 @@ PORT_BASE = 4603
 PORT_POOL = 95  # 4603..4697; 4602 is reserved for the gateway (the daemon's
                 # on-device / "local" canonical base) so it never collides.
 
+# Context window for a served model. 2048 is too small for a real agent
+# prompt (a Kara turn's system prompt alone measured 3128 tokens, and
+# llama-server rejects the whole request with exceed_context_size_error).
+CTX_SIZE = 8192
+
 # id -> {"proc": Popen|None, "port": int, "path": str}
 _running: dict[str, dict] = {}
 
@@ -218,7 +223,7 @@ def ensure(model_id: str, block: bool = True) -> dict:
     try:
         proc = subprocess.Popen(
             [str(BIN), "-m", target["path"], "--host", "127.0.0.1",
-             "--port", str(port), "-c", "2048"],
+             "--port", str(port), "-c", str(CTX_SIZE)],
             stdout=log_fh, **kwargs,
         )
     except OSError as e:

@@ -25,6 +25,10 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
+import signal
+import subprocess
+import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
@@ -67,6 +71,15 @@ def _upstream_ready(port: int) -> bool:
         return r.status == 200
     except OSError:
         return False
+
+
+def _log(line: str) -> None:
+    try:
+        GATEWAY_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(GATEWAY_LOG, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -115,6 +128,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         n = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(n) if n else b"{}"
+        _log(f"POST {path} len={n} body={raw[:600]!r}")
         try:
             body = json.loads(raw or b"{}")
         except ValueError:
@@ -153,6 +167,17 @@ class _Handler(BaseHTTPRequestHandler):
         except OSError as e:
             self._json(502, {"error": {"message": f"local server unreachable: {e}"}})
             return
+        if resp.status >= 400:
+            detail = resp.read(4000)
+            _log(f"  upstream {target['id']} {upstream_path} {resp.status} {detail[:400]!r}")
+            conn.close()
+            self.send_response(resp.status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(detail)))
+            self.end_headers()
+            self.wfile.write(detail)
+            return
+        _log(f"  upstream {target['id']} {upstream_path} {resp.status}")
         self.send_response(resp.status)
         for k, v in resp.getheaders():
             if k.lower() in ("content-length", "transfer-encoding", "connection"):
@@ -187,3 +212,85 @@ def serve(port: int = GATEWAY_PORT, host: str = "127.0.0.1") -> None:
         pass
     finally:
         httpd.server_close()
+
+
+# --------------------------------------------------------- detached control
+
+GATEWAY_PID = m.STATE_DIR / "gateway.pid"
+GATEWAY_LOG = m.STATE_DIR / "gateway.log"
+
+
+def _read_pid() -> int | None:
+    try:
+        return int(GATEWAY_PID.read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def status(port: int = GATEWAY_PORT) -> dict:
+    """Whether the gateway is running, and its pid."""
+    pid = _read_pid()
+    return {"port": port, "pid": pid, "running": bool(pid and _alive(pid))}
+
+
+def spawn(port: int = GATEWAY_PORT) -> dict:
+    """Start the gateway as a DETACHED process so it outlives the caller.
+
+    Same trick as the models: its own session, reparented to init, so
+    closing the terminal -- or the app -- does not take it down.
+    """
+    st = status(port)
+    if st["running"]:
+        return {"ok": True, **st}
+    m.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        log_fh = open(GATEWAY_LOG, "ab")
+    except OSError as e:
+        return {"ok": False, "error": f"cannot open log: {e}"}
+    kwargs: dict = {
+        "cwd": str(m.userland_dir()),
+        "stdout": log_fh,
+        "stderr": subprocess.STDOUT,
+        "stdin": subprocess.DEVNULL,
+    }
+    if os.name == "posix":
+        kwargs["start_new_session"] = True
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "localmodels", "serve", str(port)], **kwargs)
+    except OSError as e:
+        return {"ok": False, "error": f"spawn failed: {e}"}
+    finally:
+        log_fh.close()
+    try:
+        GATEWAY_PID.write_text(str(proc.pid))
+    except OSError:
+        pass
+    return {"ok": True, "port": port, "pid": proc.pid, "running": True}
+
+
+def stop(port: int = GATEWAY_PORT) -> dict:
+    """Stop a detached gateway."""
+    pid = _read_pid()
+    if pid and _alive(pid):
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                break
+            if not _alive(pid):
+                break
+            time.sleep(0.5)
+    try:
+        GATEWAY_PID.unlink()
+    except OSError:
+        pass
+    return {"ok": True, "stopped": True}

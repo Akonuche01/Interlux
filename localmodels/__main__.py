@@ -8,7 +8,10 @@ Usage (from the userland, or ``python -m localmodels`` from the repo):
     python -m localmodels autostart         # bring up the autostart list
     python -m localmodels registry          # rewrite local_models.json
     python -m localmodels paths             # show resolved paths
-    python -m localmodels serve [port]      # run the connectable gateway (default 4602)
+    python -m localmodels serve [port]      # run the gateway in the foreground (4602)
+    python -m localmodels gateway start     # run the gateway DETACHED (persistent)
+    python -m localmodels gateway stop
+    python -m localmodels gateway status
 
 No daemon involved: this only manages llama-server processes and writes
 the registry file other agents read.
@@ -79,6 +82,18 @@ def _cmd_serve(rest: list[str]) -> int:
     return 0
 
 
+def _cmd_gateway(rest: list[str]) -> int:
+    from . import gateway
+    action = rest[0] if rest else "status"
+    if action == "start":
+        print(json.dumps(gateway.spawn(), indent=1))
+    elif action == "stop":
+        print(json.dumps(gateway.stop(), indent=1))
+    else:
+        print(json.dumps(gateway.status(), indent=1))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     cmd = args[0] if args else "list"
@@ -97,6 +112,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_paths()
     if cmd == "serve":
         return _cmd_serve(rest)
+    if cmd == "gateway":
+        return _cmd_gateway(rest)
     print(__doc__)
     return 2
 
