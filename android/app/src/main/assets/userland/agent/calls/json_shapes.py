@@ -126,20 +126,24 @@ def parse(text: str) -> CallParse:
                 broke = json_span(m.group(1)) is None
         else:
             parsed = json_span(text)
-            # A bare payload naming a tool, as a list of calls OR a single
-            # object. The object case was missing, so `{"name": "shell",
-            # "arguments": {...}}` -- the OpenAI wire naming, written on its
-            # own -- parsed to zero calls and the raw call was broadcast as
-            # the answer.
-            #
-            # The guard is `normalize_calls` itself rather than a name check
-            # here: it already drops anything without a tool name, and it is
-            # the only place that knows every spelling of one (`tool`, `name`,
-            # `tool_name`, and the OpenAI `function` wrapper). A second,
-            # narrower check in front of it is what kept the nested form from
-            # ever being seen.
-            items = parsed if isinstance(parsed, list) else [parsed]
-            if parsed and all(isinstance(x, dict) for x in items):
+        # Strict (documented at the top of this module, and pinned by
+        # test_call_contract): a bare, unfenced payload is a call ONLY when
+        # it is a JSON *list* of calls, or a {"tool_calls": [...]} wrapper.
+        # A lone object such as {"tool": ...} or {"name": ...} is NOT a call
+        # -- it is a JSON value that may sit inside ordinary prose, and
+        # executing it is exactly the bug this guards against. The OpenAI
+        # wire spelling ({"name": "shell", "arguments": {...}}) is still
+        # handled, but only when it is fenced (the closed-fence path above)
+        # or wrapped in a tool_calls list; a bare object in prose is left as
+        # text so it can never trigger a tool.
+            if isinstance(parsed, list):
+                items = parsed
+            elif isinstance(parsed, dict) and isinstance(
+                    parsed.get("tool_calls"), list):
+                items = parsed["tool_calls"]
+            else:
+                items = None
+            if items is not None and all(isinstance(x, dict) for x in items):
                 calls = normalize_calls(parsed)
                 if calls:
                     if isinstance(parsed, list):

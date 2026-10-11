@@ -212,12 +212,26 @@ def revoke(policy: dict, thread_id: str) -> int:
     return 1 if grants.pop(thread_id, None) is not None else 0
 
 
-def resolve_sandbox(params: dict, policy: dict) -> dict:
-    """Turn param wins; policy default otherwise. Returns {mode, root}."""
-    mode = params.get("sandbox")
+def resolve_sandbox(params: dict, policy: dict, is_owner: bool = True) -> dict:
+    """Turn param wins for the owner; policy default otherwise.
+
+    A non-owner paired agent cannot weaken the sandbox: its turn params are
+    ignored and the (agent-merged) policy default is used for both mode and
+    root. This closes the path where a paired app sent {"sandbox":"full"} or
+    {"sandbox":"workspace","sandbox_root":"/"} to escape a read-only or
+    workspace policy the owner had set. The owner (device possession) keeps
+    the override.
+    """
+    if is_owner:
+        mode = params.get("sandbox")
+        root = params.get("sandbox_root")
+    else:
+        mode = None
+        root = None
     if mode not in SANDBOX_MODES:
         mode = policy.get("sandbox", "full")
-    root = params.get("sandbox_root") or str(engine_home())
+    if not root:
+        root = str(engine_home())
     return {"mode": mode, "root": str(Path(root).expanduser())}
 
 

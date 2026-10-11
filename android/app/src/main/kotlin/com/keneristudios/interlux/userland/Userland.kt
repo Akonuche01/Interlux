@@ -286,7 +286,10 @@ object Userland {
     // out of sync with agent/ (and was missing three), so a device re-extracting
     // its userland got the OLD daemon. Raising this is what makes the shipped
     // tree pick up the re-sync plus every fix in it.
-    private const val VERSION = "full-tools-74"
+    // Bumped 2026-10-11: ship the 9 agent/ security fixes (threads/serve/policy/
+    // tools/fs/json_shapes) to already-installed devices. Without this bump the
+    // stale .version marker skips re-extraction and the OLD daemon keeps running.
+    private const val VERSION = "full-tools-75"
     private const val ASSET_DIR = "userland"
     private const val DIR_NAME = "userland"
 

@@ -53,7 +53,13 @@ async def fs_list(path: str = ".") -> dict:
 
 
 async def fs_read(path: str, max_bytes: int = 65536) -> dict:
-    """Read a text file (truncated at max_bytes)."""
+    """Read a text file (truncated at max_bytes).
+
+    The ceiling is clamped so a caller cannot name an unbounded size and
+    make the daemon materialize a multi-GB file in RAM (or dump it all into
+    model context). The default (64 KiB) and the `truncated` flag are
+    unchanged for ordinary reads.
+    """
     try:
         p = _resolve(path)
         denied = _scope_error(p)
@@ -61,12 +67,21 @@ async def fs_read(path: str, max_bytes: int = 65536) -> dict:
             return {"status": "error", "message": denied}
         if not p.is_file():
             return {"status": "error", "message": f"not a file: {path}"}
-        data = p.read_bytes()[:max_bytes]
+        try:
+            requested = int(max_bytes)
+        except (TypeError, ValueError):
+            requested = 65536
+        ceiling = max(1, min(requested, 8 * 1024 * 1024))  # 8 MiB hard cap
+        size = p.stat().st_size
+        truncated = size > ceiling
+        # Read at most `ceiling` bytes -- never the whole file at once.
+        with p.open("rb") as fh:
+            data = fh.read(ceiling)
         return {
             "status": "success",
             "path": str(p),
             "content": data.decode("utf-8", errors="replace"),
-            "truncated": p.stat().st_size > max_bytes,
+            "truncated": truncated,
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}

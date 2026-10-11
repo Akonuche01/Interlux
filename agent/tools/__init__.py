@@ -57,13 +57,22 @@ def approval_label(tool_name: str, params: dict) -> str:
     """Short human label for the approval prompt.
 
     Tool-specific branches first: generic command/path fallbacks below
-    would otherwise shadow them.
+    would otherwise shadow them. Every value it touches is coerced so a
+    malformed tool call (args=None, packages not a list, ...) can never
+    raise and abort the whole turn -- it yields a best-effort label.
     """
     if tool_name == "exec":
-        return " ".join([str(params.get("name", "exec"))] + [str(a) for a in params.get("args", [])])
+        name = str(params.get("name", "exec"))
+        args = params.get("args")
+        if not isinstance(args, (list, tuple)):
+            args = [args] if args is not None else []
+        return " ".join([name] + [str(a) for a in args])
     if tool_name == "pkg":
-        pkgs = " ".join(params.get("packages") or [])
-        return f"pkg {params.get('action', 'list')} {pkgs}".strip()
+        action = str(params.get("action", "list"))
+        pkgs = params.get("packages")
+        if not isinstance(pkgs, (list, tuple)):
+            pkgs = [pkgs] if pkgs is not None else []
+        return f"pkg {action} {' '.join(str(p) for p in pkgs)}".strip()
     if tool_name == "tabs":
         action = params.get("action", "list")
         if action == "send":

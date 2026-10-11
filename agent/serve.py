@@ -105,6 +105,27 @@ from . import transport as transport_mod
 # stale within a process lifetime.
 _thread_agents: dict[str, str] = {}
 
+# Fix #8: per-thread serialization lock registry. Two turns on the SAME
+# thread that run concurrently each snapshot `state` at load time
+# (handle_turn -> load_state) and only persist at the very end
+# (record_turn -> save_state). Without a guard the second turn's load reads
+# the pre-first-save snapshot, so its later save_state silently discards the
+# first turn's appended history and overwrites the turn counter. Holding one
+# asyncio.Lock per thread_id across the whole load->execute->save critical
+# section forces same-thread turns to run strictly one at a time, while
+# different threads stay fully concurrent. The lock is acquired in
+# handle_turn and released in _run_turn's finally (after the save).
+_thread_locks: dict[str, asyncio.Lock] = {}
+
+
+def _thread_lock(thread_id: str) -> asyncio.Lock:
+    """Return (creating if needed) the per-thread serialization lock."""
+    lock = _thread_locks.get(thread_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _thread_locks[thread_id] = lock
+    return lock
+
 
 async def broadcast(payload: dict) -> None:
     """Namespaced broadcast: thread events reach only the owner's agent.
@@ -227,7 +248,8 @@ class ApprovalManager:
         self.pending: dict[str, dict] = {}
 
     def request_approval(
-        self, thread_id: str, params: dict, tool: str = "", label: str = ""
+        self, thread_id: str, params: dict, tool: str = "", label: str = "",
+        agent: str = "",
     ) -> asyncio.Future:
         self.sweep_expired()
         fid = params["id"]
@@ -237,6 +259,7 @@ class ApprovalManager:
             "tool": tool,
             "label": label,
             "params": dict(params),
+            "agent": agent,
             "deadline": time.monotonic() + APPROVAL_TTL_S,
         }
         self.pending[fid] = entry
@@ -1419,7 +1442,8 @@ async def run_tool_loop(turn: dict, client_socket) -> None:
                     approval_params["path"] = str(params["path"])[:500]
 
                 approval_future = approvals.request_approval(
-                    thread_id, approval_params, tool=tool_name, label=label
+                    thread_id, approval_params, tool=tool_name, label=label,
+                    agent=turn.get("agent", ""),
                 )
                 logger.info(f"Requesting approval: {fid}")
                 await broadcast({
@@ -2194,6 +2218,12 @@ async def handle_turn(payload: dict, client_socket) -> dict:
         _agent = params.get("_agent") or ""
     else:
         _agent = _caller_agent(client_socket)
+    # Fix #8: serialize same-thread turns (see _thread_lock for the race).
+    # Acquired before load_state and handed off to _run_turn, which releases
+    # it only after record_turn -> save_state has persisted. Early returns
+    # below release it explicitly; the except below releases on error.
+    _tlock = _thread_lock(thread_id)
+    await _tlock.acquire()
     state = load_state(thread_id) or new_state(thread_id, agent=_agent or "")
     # Cross-agent confinement: a paired caller may only run turns on its
     # own threads. Without this any agent could append to another's
@@ -2203,6 +2233,7 @@ async def handle_turn(payload: dict, client_socket) -> dict:
     # from missing: no oracle for enumerating others' ids.
     if _agent and state.get("agent", "") and \
             state.get("agent", "") != _agent:
+        _tlock.release()
         return {
             "id": payload.get("id"),
             "error": {"code": -32602,
@@ -2215,8 +2246,9 @@ async def handle_turn(payload: dict, client_socket) -> dict:
     policy = agent_policy(load_policy(), _agent or "")
     _target = resolve_run_target(params, policy)
     provider_name, model = _target["provider"], _target["model"]
-    # Epic B: turn param wins; policy.json default otherwise.
-    sandbox = resolve_sandbox(params, policy)
+    # Epic B: the owner may override sandbox via turn params; a non-owner
+    # paired agent cannot weaken the policy it was given.
+    sandbox = resolve_sandbox(params, policy, is_owner=agents_mod.is_owner(_agent or ""))
     # Epic G: turn mode — "exec" (default) or "plan" (no writes, explicit).
     mode = params.get("mode", "exec")
     if mode not in ("exec", "plan"):
@@ -2245,6 +2277,7 @@ async def handle_turn(payload: dict, client_socket) -> dict:
         _cap = agent_quota(load_policy(), _me)["concurrency"]
         _live = _live_agent_turns(_me)
         if len(_live) >= _cap:
+            _tlock.release()
             return {
                 "id": payload.get("id"),
                 "error": {"code": -32002,
@@ -2282,6 +2315,7 @@ async def handle_turn(payload: dict, client_socket) -> dict:
     # Step 3/4: per-turn agent identity for tool-side config resolution.
     # Reset alongside the other two tokens on every exit path below.
     agent_token = agent_ctx.set(turn.get("agent", ""))
+    handed_off = False
     try:
         # Epic D: skill catalog (+ requested bodies) ride as system messages
         # inside build_messages, rebuilt every Epic J round. The agency
@@ -2307,17 +2341,28 @@ async def handle_turn(payload: dict, client_socket) -> dict:
             agency_messages(turn.get("agent", ""))
             + skill_messages(_skills or None, allow=_caps["skills"]),
             token, sandbox_token, agent_token,
+            thread_lock=_tlock,
         ))
         RUNNING[turn["id"]] = task
         # Codex parity: the reply only opens the turn. Everything else —
         # deltas, tool runs, completion — arrives as broadcasts. Awaiting
         # the whole loop here left send futures pending for hours and made
         # every reconnect look like a failed send.
+        # Fix #8: hand the per-thread lock to _run_turn, which releases it
+        # in its finally after record_turn -> save_state. Flagging
+        # handed_off stops the except below from double-releasing.
+        handed_off = True
         return {
             "id": payload.get("id"),
             "result": {"turn_id": turn["id"], "started": True},
         }
-    except Exception:
+    except BaseException:
+        # Fix #8: release the per-thread lock if we never handed it off to
+        # _run_turn. Covers ordinary errors AND CancelledError (a
+        # BaseException in 3.8+). If the lock was handed off, _run_turn owns
+        # the release — never double-release here (would raise RuntimeError).
+        if not handed_off:
+            _tlock.release()
         RUNNING.pop(turn["id"], None)
         _release_turn_slot(turn.get("agent", ""), turn["id"])
         sandbox_ctx.reset(sandbox_token)
@@ -2329,7 +2374,8 @@ async def handle_turn(payload: dict, client_socket) -> dict:
 async def _run_turn(payload: dict, params: dict, user_msg: str,
                     provider, model: str, thread_id: str, turn: dict,
                     client_socket, state: dict, extra_system: list,
-                    token, sandbox_token, agent_token) -> None:
+                    token, sandbox_token, agent_token,
+                    thread_lock=None) -> None:
     """Background half of handle_turn: run the loop, persist, broadcast."""
     try:
         await _execute_turn(
@@ -2358,6 +2404,12 @@ async def _run_turn(payload: dict, params: dict, user_msg: str,
                          "thread_id": thread_id,
                          "error": str(e)[:500]})
     finally:
+        # Fix #8: release the per-thread lock handed off from handle_turn.
+        # This runs only after _execute_turn (and its record_turn ->
+        # save_state) has completed, so the next same-thread turn loads the
+        # freshest state instead of a stale pre-save snapshot.
+        if thread_lock is not None:
+            thread_lock.release()
         RUNNING.pop(turn["id"], None)
         _release_turn_slot(turn.get("agent", ""), turn["id"])
         try:
@@ -2618,9 +2670,19 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
                         "code": -32602, "message": "unknown fid"}}
                 _athread = _apending.get("thread", "")
                 _astate = load_state(_athread) if _athread else None
-                if _astate is not None and \
-                        _astate.get("agent", "") and \
-                        _astate.get("agent", "") != _am:
+                # Cross-agent confinement. The owning agent of the thread is
+                # known either from persisted state OR, for a first-turn
+                # thread that is not yet persisted, from the agent that
+                # requested this approval. A foreign agent may not answer
+                # another's pending approval -- the owner (device
+                # possession) may still answer any. This closes the old
+                # fail-open where a missing state record let any agent
+                # approve another's tool call.
+                _athread_agent = (
+                    _astate.get("agent", "") if _astate is not None
+                    else _apending.get("agent", ""))
+                if _athread_agent and _athread_agent != _am \
+                        and not agents_mod.is_owner(_am):
                     return {"id": request_id, "error": {
                         "code": -32602, "message": "unknown fid"}}
             if approvals.approve(fid, decision, scope,
@@ -2670,6 +2732,14 @@ async def handle_request(payload: dict, client_socket) -> dict | None:
             # cards nobody answers. Anything else clears back to
             # ask-everything.
             if "approval_mode" in params:
+                # Owner only: a paired (non-owner) agent must not be able
+                # to set approval_mode:"never" and disable every approval
+                # prompt for itself, including write-class tools. This is
+                # consistent with the global approval_default control just
+                # below, which is already owner-gated.
+                if not (me and agents_mod.is_owner(me)):
+                    return {"id": request_id, "error": {
+                        "code": -32001, "message": "owner only"}}
                 mode = str(params.get("approval_mode") or "").strip()
                 if mode == "never":
                     agent_section["approval_mode"] = "never"

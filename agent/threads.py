@@ -535,7 +535,7 @@ def read_thread(thread_id: str, limit: int = 100,
     state = load_state(thread_id)
     source = "state"
     if state is None:
-        history = replay_audit(thread_id)
+        history = replay_audit(thread_id, agent=agent)
         if not history:
             return None
         state = {
@@ -543,6 +543,7 @@ def read_thread(thread_id: str, limit: int = 100,
             "turns": len(history) // 2,
             "base": "",
             "history": history,
+            "agent": agent,
         }
         source = "audit"
     # Cross-agent check: refuse to read another agent's thread.
@@ -672,7 +673,7 @@ def unarchive_thread(thread_id: str, agent: str = "") -> bool:
 # Config secrets are denied by filename under CONFIG_DIR.
 _FS_DENY_NAMES = frozenset({
     "providers.json", "policy.json", "agents.json", "audit.jsonl",
-    "bots.autostart",
+    "mcp.json", "bots.autostart",
 })
 
 
@@ -711,7 +712,12 @@ def fs_scope_error(agent_id: str, path, is_owner: bool = False) -> str | None:
         except Exception:
             config_root = CONFIG_DIR
         if resolved.parent == config_root and \
-                resolved.name in _FS_DENY_NAMES:
+                (resolved.name in _FS_DENY_NAMES
+                 or resolved.suffix == ".tmp"):
+            # Secret files by name, AND any atomic-write temp file left in
+            # CONFIG_DIR (providers.json.tmp, policy.json.tmp, agents.json.tmp,
+            # mcp.json.tmp). A crash/kill between write_text and replace would
+            # otherwise leave plaintext keys readable by any non-owner agent.
             return None if is_owner else "not permitted"
         bots_dir = config_root / "bots"
         if resolved.parent == bots_dir and resolved.suffix == ".pid":
